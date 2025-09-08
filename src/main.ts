@@ -1,7 +1,10 @@
 import { Assets } from './core/assets';
+import { loadCannonSound, loadHitSound, loadPlayerHitSound, loadShipSinkingSound, loadTorpedoSounds, playShipSinkingSound, playTorpedoLaunchSound, playTorpedoLoadSound, setPlayerPosition } from './core/audio';
+import * as Constants from './core/constants';
 import { Input } from './core/input';
 import { Vec2 } from './core/vector';
 import { AIShip } from './game/ai-ship';
+import { CapitalShip } from './game/capital-ship';
 import { Projectile } from './game/projectile';
 import { Ship } from './game/ship';
 import { Torpedo } from './game/torpedo';
@@ -10,66 +13,12 @@ import { Torpedo } from './game/torpedo';
 // Game Configuration Constants
 // =========================
 
-// World dimensions and camera behavior
-const WORLD_BOUNDS = { minX: -4000, maxX: 4000, minY: -4000, maxY: 4000 } as const;
-const CAMERA_VELOCITY_LEAD_FACTOR = 0.25; // lead camera by velocity fraction
+// World bounds reference (defined in constants)
+const WORLD = Constants.WORLD_BOUNDS;
 
-// Player defaults
-const PLAYER_LENGTH_PX = 140;
-const PLAYER_WIDTH_PX = 48;
-const PLAYER_CANNON_PAIRS = 8; // pairs per side
-const PLAYER_MAX_HEALTH = 140;
-const PLAYER_MAX_SPEED = 180;
-const PLAYER_THRUST = 50;
-const PLAYER_REVERSE_THRUST = 20;
-const PLAYER_TURN_ACCEL = 1.5;    // rad/s^2 base
-const PLAYER_RUDDER_RATE = 2;   // how fast rudder moves per second
-const PLAYER_LINEAR_DRAG = 0.4;   // water drag
-const PLAYER_ANGULAR_DRAG = 2.0;  // angular drag
-
-// AI defaults
-const AI_LENGTH_PX = 95;
-const AI_WIDTH_PX = 36;
-const AI_CANNON_PAIRS = 3; // pairs per side
-const AI_MAX_HEALTH = 60;
-const AI_MAX_SPEED = 170;
-const AI_THRUST = 48;
-const AI_REVERSE_THRUST = 18;
-const AI_TURN_ACCEL = 1.0;
-const AI_RUDDER_RATE = 1.5;
-const AI_LINEAR_DRAG = 0.4;
-const AI_ANGULAR_DRAG = 2.0;
-
-// Population and spawning
-const AI_TOTAL_STARTING_SHIPS = 16;
-const AI_START_IN_VIEW_COUNT = 4;
-const AI_SPAWN_ANNULUS_MIN_R = 600;
-const AI_SPAWN_ANNULUS_MAX_R = 2600;
-const AI_OFFMAP_SPAWN_DISTANCE = 500;
-const SPAWN_IN_VIEW_MARGIN_PX = 100;
-const MIN_ENEMIES_IN_VIEW = 2;
-const MAX_ENEMIES_TOTAL = 16;
-const AGGRESSIVE_MIN_COUNT = 2;
-
-// Collision + physics tuning
-const WORLD_BOUNDARY_BOUNCE = 0.4;
-const COLLISION_RESTITUTION = 0.2; // bounce factor on ship-ship collision
-const COLLISION_FRICTION = 0.08;   // tangential friction factor
-const RAM_DAMAGE_COOLDOWN_S = 0.6; // seconds between damage ticks for a pair
-
-// Treasure / upgrades
-const TREASURE_PICKUP_RADIUS = 80; // px
-const RESPAWN_SECONDS_AFTER_FULLY_SUNK = 5;
-const SHOP_HEAL_DURATION_S = 5; // seconds to apply healing from shop upgrades
-const TORPEDO_COST_XP = 300;
-const TORPEDO_RELOAD_S = 15;
-const TORPEDO_ARMING_S = 1;
-const TORPEDO_SPEED = 140;
-
-// Minimap
-const MINIMAP_SIZE_PX = 180;
-const MINIMAP_MARGIN_PX = 12;
-const MINIMAP_PAD_PX = 10;
+// Torpedo constants (for backward compatibility with HUD display)
+const TORPEDO_ARMING_S = Constants.TORPEDO_ARMING_S;
+const TORPEDO_RELOAD_S = Constants.TORPEDO_RELOAD_S;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -96,29 +45,78 @@ const ships: Ship[] = [];
 const projectiles: Projectile[] = [];
 const camera = new Vec2(0, 0);
 let shipSpriteRef: HTMLImageElement | undefined;
-let playerRespawnTimer: number | null = null;
-let respawnLabelEl: HTMLDivElement | null = null;
+// Removed respawn timer and label - game over screen shows immediately on death
 const collisionCooldown = new Map<string, number>();
-type Treasure = { pos: Vec2; collected: boolean };
+type Treasure = { pos: Vec2; collected: boolean; size: 'normal' | 'large'; xpValue: number };
 const treasures: Treasure[] = [];
 let upgradeOverlayOpen = false;
 let upgradeOverlayEl: HTMLDivElement | null = null;
+let startScreenOpen = true;
+let startScreenEl: HTMLDivElement | null = null;
+let gameOverScreenOpen = false;
+let gameOverScreenEl: HTMLDivElement | null = null;
 let collectLabelEl: HTMLDivElement | null = null;
-let playerXP = 0;
-// Upgrade XP costs
-const UPGRADE_BASE_COST_XP = 100;
-const UPGRADE_INFLATION = 1.20; // 10% increase per purchase for certain upgrades
-let costRepairXP = UPGRADE_BASE_COST_XP;
-let costReinforceXP = UPGRADE_BASE_COST_XP;
-let costCannonsXP = UPGRADE_BASE_COST_XP;
+let playerXP = 400; // Starting XP for ship customization
+let totalXP = 400; // Total XP ever earned (never decreases)
+// Upgrade XP costs (initialized from constants)
+let costRepairXP = Constants.XP_UPGRADE_BASE_COST;
+let costReinforceXP = Constants.XP_UPGRADE_BASE_COST;
+let costCannonsXP = Constants.XP_UPGRADE_BASE_COST;
+let costTorpedoXP = Constants.XP_TORPEDO_COST;
 // Healing over time (shop)
 let healJobs: { remaining: number; perSec: number }[] = [];
 // Torpedo state
 type TorpedoTube = { cooldown: number; arming: number };
 let torpedoTubes: TorpedoTube[] = [];
 
-// World bounds (finite map)
-const WORLD = WORLD_BOUNDS;
+// Game statistics tracking
+let gameStats = {
+  cannonShotsFired: 0,
+  cannonHits: 0,
+  torpedoShotsFired: 0,
+  torpedoHits: 0,
+  shipsSunk: {
+    regular: 0,
+    capital: 0
+  }
+};
+
+// Stat tracking functions
+(window as any).trackCannonShot = () => gameStats.cannonShotsFired++;
+(window as any).trackCannonHit = () => gameStats.cannonHits++;
+(window as any).trackTorpedoShot = () => gameStats.torpedoShotsFired++;
+(window as any).trackTorpedoHit = () => gameStats.torpedoHits++;
+(window as any).trackShipSunk = (isCapital: boolean) => {
+  if (isCapital) {
+    gameStats.shipsSunk.capital++;
+  } else {
+    gameStats.shipsSunk.regular++;
+  }
+};
+
+// World bounds (finite map) - now defined above
+
+// Helper function to decide ship type based on rarity
+function shouldSpawnCapitalShip(): boolean {
+  // 15% chance to spawn a capital ship instead of regular AI ship
+  return Math.random() < 0.15;
+}
+
+// Create AI ship or capital ship based on rarity
+function createAIShip(player: Ship, sprite?: HTMLImageElement): AIShip {
+  if (shouldSpawnCapitalShip()) {
+    return new CapitalShip(player, { sprite });
+  } else {
+    return new AIShip(player, { ship: { length: Constants.AI_LENGTH_PX, width: Constants.AI_WIDTH_PX, cannonPairs: Constants.AI_CANNON_PAIRS }, sprite });
+  }
+}
+
+// Initialize audio system and load sounds
+loadCannonSound().catch(err => console.warn('Audio initialization failed:', err));
+loadHitSound().catch(err => console.warn('Hit sound initialization failed:', err));
+loadPlayerHitSound().catch(err => console.warn('Player hit sound initialization failed:', err));
+loadTorpedoSounds().catch(err => console.warn('Torpedo sound initialization failed:', err));
+loadShipSinkingSound().catch(err => console.warn('Ship sinking sound initialization failed:', err));
 
 // Try to load webp sprite; fallback to hull drawing
 Assets.loadImage('/ship.webp').then(img => initGame(img)).catch(() => initGame());
@@ -135,26 +133,29 @@ function getViewportBounds(camera: Vec2, canvasWidth: number, canvasHeight: numb
 }
 
 function spawnAIShipInView(player: Ship, sprite?: HTMLImageElement): AIShip {
-  const s = new AIShip(player, { ship: { length: AI_LENGTH_PX, width: AI_WIDTH_PX, cannonPairs: AI_CANNON_PAIRS }, sprite });
-  s.maxHealth = AI_MAX_HEALTH;
-  s.health = s.maxHealth;
-  s.maxSpeed = AI_MAX_SPEED;
-  s.thrust = AI_THRUST;
-  s.reverseThrust = AI_REVERSE_THRUST;
-  s.turnAccel = AI_TURN_ACCEL;
-  s.rudderRate = AI_RUDDER_RATE;
-  s.linDrag = AI_LINEAR_DRAG;
-  s.angDrag = AI_ANGULAR_DRAG;
-  s.turnAccel = AI_TURN_ACCEL;
-  s.rudderRate = AI_RUDDER_RATE;
-  s.linDrag = AI_LINEAR_DRAG;
-  s.angDrag = AI_ANGULAR_DRAG;
+  const s = createAIShip(player, sprite);
+  // Only apply regular AI stats if it's not a capital ship
+  if (!(s instanceof CapitalShip)) {
+    s.maxHealth = Constants.AI_MAX_HEALTH;
+    s.health = s.maxHealth;
+    s.maxSpeed = Constants.AI_MAX_SPEED;
+    s.thrust = Constants.AI_THRUST;
+    s.reverseThrust = Constants.AI_REVERSE_THRUST;
+    s.turnAccel = Constants.AI_TURN_ACCEL;
+    s.rudderRate = Constants.AI_RUDDER_RATE;
+    s.linDrag = Constants.AI_LINEAR_DRAG;
+    s.angDrag = Constants.AI_ANGULAR_DRAG;
+    s.turnAccel = Constants.AI_TURN_ACCEL;
+    s.rudderRate = Constants.AI_RUDDER_RATE;
+    s.linDrag = Constants.AI_LINEAR_DRAG;
+    s.angDrag = Constants.AI_ANGULAR_DRAG;
+  }
 
   // Get current viewport bounds (camera starts at player position)
   const viewport = getViewportBounds(camera, canvas.width, canvas.height);
 
   // Spawn within view with some margin to avoid immediate edge clipping
-  const margin = SPAWN_IN_VIEW_MARGIN_PX;
+  const margin = Constants.SPAWN_IN_VIEW_MARGIN_PX;
   const viewWidth = viewport.right - viewport.left - margin * 2;
   const viewHeight = viewport.bottom - viewport.top - margin * 2;
 
@@ -172,15 +173,18 @@ function spawnAIShipInView(player: Ship, sprite?: HTMLImageElement): AIShip {
 }
 
 function spawnAIShipBeyondMap(player: Ship, sprite?: HTMLImageElement): AIShip {
-  const s = new AIShip(player, { ship: { length: AI_LENGTH_PX, width: AI_WIDTH_PX, cannonPairs: AI_CANNON_PAIRS }, sprite });
-  s.maxHealth = AI_MAX_HEALTH;
-  s.health = s.maxHealth;
-  s.maxSpeed = AI_MAX_SPEED;
-  s.thrust = AI_THRUST;
-  s.reverseThrust = AI_REVERSE_THRUST;
+  const s = createAIShip(player, sprite);
+  // Only apply regular AI stats if it's not a capital ship
+  if (!(s instanceof CapitalShip)) {
+    s.maxHealth = Constants.AI_MAX_HEALTH;
+    s.health = s.maxHealth;
+    s.maxSpeed = Constants.AI_MAX_SPEED;
+    s.thrust = Constants.AI_THRUST;
+    s.reverseThrust = Constants.AI_REVERSE_THRUST;
+  }
 
   // Spawn beyond map edges and sail toward center
-  const spawnDistance = AI_OFFMAP_SPAWN_DISTANCE; // Distance beyond map edges to spawn
+  const spawnDistance = Constants.AI_OFFMAP_SPAWN_DISTANCE; // Distance beyond map edges to spawn
   const worldCenterX = 0;
   const worldCenterY = 0;
 
@@ -224,25 +228,33 @@ function spawnAIShipBeyondMap(player: Ship, sprite?: HTMLImageElement): AIShip {
 
 function initGame(sprite?: HTMLImageElement) {
   shipSpriteRef = sprite;
-  player = new Ship({ length: PLAYER_LENGTH_PX, width: PLAYER_WIDTH_PX, cannonPairs: PLAYER_CANNON_PAIRS }, sprite);
+
+  // Clear all existing ships to ensure clean state
+  ships.length = 0;
+  player = new Ship({
+    length: Constants.PLAYER_LENGTH_PX,
+    width: Constants.PLAYER_WIDTH_PX,
+    cannonPairs: Constants.PLAYER_CANNON_PAIRS
+  }, sprite);
   player.isPlayer = true;
-  player.maxHealth = PLAYER_MAX_HEALTH;
+  player.maxHealth = Constants.PLAYER_MAX_HEALTH;
   player.health = player.maxHealth;
   // Player physics tuning
-  player.maxSpeed = PLAYER_MAX_SPEED;
-  player.thrust = PLAYER_THRUST;
-  player.reverseThrust = PLAYER_REVERSE_THRUST;
-  player.turnAccel = PLAYER_TURN_ACCEL;
-  player.rudderRate = PLAYER_RUDDER_RATE;
-  player.linDrag = PLAYER_LINEAR_DRAG;
-  player.angDrag = PLAYER_ANGULAR_DRAG;
+  player.maxSpeed = Constants.PLAYER_MAX_SPEED;
+  player.thrust = Constants.PLAYER_THRUST;
+  player.reverseThrust = Constants.PLAYER_REVERSE_THRUST;
+  player.turnAccel = Constants.PLAYER_TURN_ACCEL;
+  player.rudderRate = Constants.PLAYER_RUDDER_RATE;
+  player.linDrag = Constants.PLAYER_LINEAR_DRAG;
+  player.angDrag = Constants.PLAYER_ANGULAR_DRAG;
   ships.push(player);
   setupCannonHud(player);
   setupMetricsHud();
+  setupScoreHud();
 
   // Spawn AI ships: some in view, some scattered around the world
-  const totalShips = AI_TOTAL_STARTING_SHIPS;
-  const shipsInView = AI_START_IN_VIEW_COUNT; // Always have N ships in view initially
+  const totalShips = Constants.AI_TOTAL_STARTING_SHIPS;
+  const shipsInView = Constants.AI_START_IN_VIEW_COUNT; // Always have N ships in view initially
 
   // Spawn ships in view first
   for (let i = 0; i < shipsInView; i++) {
@@ -253,30 +265,36 @@ function initGame(sprite?: HTMLImageElement) {
 
   // Spawn remaining ships scattered around the world
   const remainingShips = totalShips - shipsInView;
-  const minR = AI_SPAWN_ANNULUS_MIN_R;
-  const maxR = AI_SPAWN_ANNULUS_MAX_R;
+  const minR = Constants.AI_SPAWN_ANNULUS_MIN_R;
+  const maxR = Constants.AI_SPAWN_ANNULUS_MAX_R;
   for (let i = 0; i < remainingShips; i++) {
-    const s = new AIShip(player, { ship: { length: AI_LENGTH_PX, width: AI_WIDTH_PX, cannonPairs: AI_CANNON_PAIRS }, sprite });
-    s.maxHealth = AI_MAX_HEALTH;
-    s.health = s.maxHealth;
+    const s = createAIShip(player, sprite);
+    // Only apply regular AI stats if it's not a capital ship
+    if (!(s instanceof CapitalShip)) {
+      s.maxHealth = Constants.AI_MAX_HEALTH;
+      s.health = s.maxHealth;
+      s.maxSpeed = Constants.AI_MAX_SPEED;
+      s.thrust = Constants.AI_THRUST;
+      s.reverseThrust = Constants.AI_REVERSE_THRUST;
+      s.turnAccel = Constants.AI_TURN_ACCEL;
+      s.rudderRate = Constants.AI_RUDDER_RATE;
+      s.linDrag = Constants.AI_LINEAR_DRAG;
+      s.angDrag = Constants.AI_ANGULAR_DRAG;
+    }
     // random position in annulus [minR, maxR) around player
     const angle = Math.random() * Math.PI * 2;
     const r = Math.sqrt(Math.random() * (maxR * maxR - minR * minR) + minR * minR);
     s.pos.set(player.pos.x + Math.cos(angle) * r, player.pos.y + Math.sin(angle) * r);
     s.angle = angle + (Math.random() - 0.5) * 0.6; // varied starting heading
-    s.maxSpeed = AI_MAX_SPEED;
-    s.thrust = AI_THRUST;
-    s.reverseThrust = AI_REVERSE_THRUST;
-    s.turnAccel = AI_TURN_ACCEL;
-    s.rudderRate = AI_RUDDER_RATE;
-    s.linDrag = AI_LINEAR_DRAG;
-    s.angDrag = AI_ANGULAR_DRAG;
     ships.push(s);
     enemies.push(s);
   }
 
   // Mark two nearest as aggressive initially
   ensureAggressiveAI();
+
+  // Show start screen
+  openStartScreen();
 }
 
 // Simple ocean background
@@ -287,35 +305,66 @@ function drawOcean(w: number, h: number, cam: Vec2, t: number) {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
-  // world-space grid to visualize relative motion
-  const minor = 80; // px
-  const majorEvery = 5;
-  const leftWorld = cam.x - w / 2;
-  const topWorld = cam.y - h / 2;
-  const firstWX = Math.floor(leftWorld / minor) * minor;
-  const firstWY = Math.floor(topWorld / minor) * minor;
+  // Fixed world-space grid (constant, doesn't move with camera)
+  const gridSize = Constants.GRID_SIZE_WORLD_UNITS;
+  const majorEvery = Constants.GRID_MAJOR_LINE_EVERY;
 
   ctx.save();
-  for (let wx = firstWX, ix = 0; wx <= cam.x + w / 2; wx += minor, ix++) {
+
+  // Calculate the range of grid lines visible in the current viewport
+  const leftWorld = cam.x - w / 2;
+  const rightWorld = cam.x + w / 2;
+  const topWorld = cam.y - h / 2;
+  const bottomWorld = cam.y + h / 2;
+
+  // Find the first grid line to the left/top of the viewport
+  const firstGridX = Math.floor(leftWorld / gridSize) * gridSize;
+  const firstGridY = Math.floor(topWorld / gridSize) * gridSize;
+
+  // Draw vertical grid lines (with performance optimization)
+  let verticalLinesDrawn = 0;
+  const maxLines = 50; // Safety limit to prevent performance issues
+
+  for (let wx = firstGridX; wx <= rightWorld + gridSize && verticalLinesDrawn < maxLines; wx += gridSize) {
     const sx = wx - cam.x + w / 2;
-    const isMajor = ix % majorEvery === 0;
-    ctx.strokeStyle = isMajor ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)';
-    ctx.lineWidth = isMajor ? 1.5 : 1;
+
+    // Skip if line is outside viewport bounds (with some margin)
+    if (sx < -50 || sx > w + 50) continue;
+
+    // Calculate grid index for major/minor line determination
+    const gridIndex = Math.abs(Math.round(wx / gridSize));
+    const isMajor = gridIndex % majorEvery === 0;
+
+    ctx.strokeStyle = isMajor ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = isMajor ? 2 : 1;
     ctx.beginPath();
     ctx.moveTo(sx, 0);
     ctx.lineTo(sx, h);
     ctx.stroke();
+    verticalLinesDrawn++;
   }
-  for (let wy = firstWY, iy = 0; wy <= cam.y + h / 2; wy += minor, iy++) {
+
+  // Draw horizontal grid lines (with performance optimization)
+  let horizontalLinesDrawn = 0;
+  for (let wy = firstGridY; wy <= bottomWorld + gridSize && horizontalLinesDrawn < maxLines; wy += gridSize) {
     const sy = wy - cam.y + h / 2;
-    const isMajor = iy % majorEvery === 0;
-    ctx.strokeStyle = isMajor ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.07)';
-    ctx.lineWidth = isMajor ? 1.5 : 1;
+
+    // Skip if line is outside viewport bounds (with some margin)
+    if (sy < -50 || sy > h + 50) continue;
+
+    // Calculate grid index for major/minor line determination
+    const gridIndex = Math.abs(Math.round(wy / gridSize));
+    const isMajor = gridIndex % majorEvery === 0;
+
+    ctx.strokeStyle = isMajor ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = isMajor ? 2 : 1;
     ctx.beginPath();
     ctx.moveTo(0, sy);
     ctx.lineTo(w, sy);
     ctx.stroke();
+    horizontalLinesDrawn++;
   }
+
   ctx.restore();
 }
 
@@ -336,8 +385,8 @@ function loop(now: number) {
 
   if (!player) return; // wait for init
 
-  // Update (paused while shop is open)
-  if (!upgradeOverlayOpen) {
+  // Update (paused while shop, start screen, or game over screen is open)
+  if (!upgradeOverlayOpen && !startScreenOpen && !gameOverScreenOpen) {
     player.update(dt, {
       up: input.isDown('ArrowUp'),
       down: input.isDown('ArrowDown'),
@@ -346,6 +395,9 @@ function loop(now: number) {
       fire: input.isDown('Space'),
     }, projectiles);
     applyWorldBounds(player);
+
+    // Update player position for distance-based audio
+    setPlayerPosition(player.pos);
 
     // Choose aggressive ships first (ensures 2 minimum)
     ensureAggressiveAI();
@@ -380,13 +432,14 @@ function loop(now: number) {
 
     updateCannonHud(player);
     updateMetricsHud(player);
+    updateScoreHud();
 
     // Maintain minimum ships in view
     maintainShipsInView();
 
     // Camera follows ship, with slight lead in velocity direction
-    camera.x = player.pos.x + player.vel.x * CAMERA_VELOCITY_LEAD_FACTOR;
-    camera.y = player.pos.y + player.vel.y * CAMERA_VELOCITY_LEAD_FACTOR;
+    camera.x = player.pos.x + player.vel.x * Constants.CAMERA_VELOCITY_LEAD_FACTOR;
+    camera.y = player.pos.y + player.vel.y * Constants.CAMERA_VELOCITY_LEAD_FACTOR;
 
     // Collisions: projectiles vs ships
     for (let i = projectiles.length - 1; i >= 0; i--) {
@@ -403,9 +456,15 @@ function loop(now: number) {
         if (s.isSinking && s.isFullySunk()) continue;
         if (s.hitsCircle(p.pos, p.radius)) {
           const prev = s.health;
-          s.takeDamage(p.damage);
+          s.takeDamage(p.damage, p.owner === player);
           if (p.owner === player) {
-            addXP(p.damage);
+            addXP(p.damage * Constants.XP_DAMAGE_MULTIPLIER);
+            // Track hit based on projectile type
+            if (p instanceof Torpedo) {
+              (window as any).trackTorpedoHit();
+            } else {
+              (window as any).trackCannonHit();
+            }
           }
           // If already sinking, accelerate the sink by 1 second per hit
           if (s.isSinking) {
@@ -417,10 +476,25 @@ function loop(now: number) {
           if (s.health <= 0 && !s.isSinking) {
             // Start sinking animation instead of removing immediately
             s.startSinking();
-            if (p.owner === player) addXP(20); // sink bonus
-            // Spawn treasure for non-player ships
-            if (s !== player) {
-              treasures.push({ pos: s.pos.clone(), collected: false });
+            // Play ship sinking sound
+            playShipSinkingSound(s === player, s instanceof CapitalShip, s.pos);
+            if (p.owner === player) {
+              addXP(Constants.XP_SINK_BONUS); // sink bonus
+              // Track ship sunk by player
+              (window as any).trackShipSunk(s instanceof CapitalShip);
+            }
+            // If the player died, immediately show game over screen
+            if (s === player) {
+              openGameOverScreen();
+            }
+            // Spawn treasure only for capital ships (non-player)
+            if (s !== player && s instanceof CapitalShip) {
+              treasures.push({
+                pos: s.pos.clone(),
+                collected: false,
+                size: 'large',
+                xpValue: Constants.XP_TREASURE_LARGE
+              });
             }
           }
           break;
@@ -431,9 +505,9 @@ function loop(now: number) {
     // Auto-collect treasure when in pickup radius
     if (player && !player.isSinking) {
       for (const t of treasures) {
-        if (!t.collected && player.hitsCircle(t.pos, TREASURE_PICKUP_RADIUS)) {
+        if (!t.collected && player.hitsCircle(t.pos, Constants.TREASURE_PICKUP_RADIUS)) {
           t.collected = true;
-          addXP(40); // bonus for collecting treasure
+          addXP(t.xpValue); // bonus for collecting treasure (varies by size)
         }
       }
     }
@@ -458,24 +532,10 @@ function loop(now: number) {
     // Still update HUD when paused
     updateCannonHud(player);
     updateMetricsHud(player);
+    updateScoreHud();
   }
 
-  // Start respawn countdown once the player is fully sunk
-  if (player.isSinking && player.isFullySunk() && playerRespawnTimer === null) {
-    playerRespawnTimer = RESPAWN_SECONDS_AFTER_FULLY_SUNK; // seconds
-    showRespawnLabel();
-  }
-
-  // Handle player respawn countdown
-  if (playerRespawnTimer !== null) {
-    playerRespawnTimer -= dt;
-    updateRespawnLabel(Math.max(0, playerRespawnTimer));
-    if (playerRespawnTimer <= 0) {
-      respawnPlayer();
-      playerRespawnTimer = null;
-      hideRespawnLabel();
-    }
-  }
+  // Game over screen is triggered immediately when player dies, no respawn logic needed
 
   // Remove fully sunk ships (keep player for now)
   for (let i = ships.length - 1; i >= 0; i--) {
@@ -516,22 +576,27 @@ function loop(now: number) {
             player.pos.y + fwd.y * (player.length * 0.55),
           );
           const vel = new Vec2(
-            player.vel.x + fwd.x * TORPEDO_SPEED,
-            player.vel.y + fwd.y * TORPEDO_SPEED,
+            player.vel.x + fwd.x * Constants.TORPEDO_SPEED,
+            player.vel.y + fwd.y * Constants.TORPEDO_SPEED,
           );
           projectiles.push(new Torpedo(spawn, vel, player));
-          tube.cooldown = TORPEDO_RELOAD_S;
+          (window as any).trackTorpedoShot(); // Track torpedo shot
+          playTorpedoLaunchSound(); // Play launch sound when torpedo actually fires
+          tube.cooldown = Constants.TORPEDO_RELOAD_S;
           tube.arming = 0;
         }
       }
     }
     if (input.wasPressed('KeyT')) {
       const ready = torpedoTubes.find(t => t.cooldown <= 0 && t.arming <= 0);
-      if (ready) ready.arming = TORPEDO_ARMING_S;
+      if (ready) {
+        ready.arming = Constants.TORPEDO_ARMING_S;
+        playTorpedoLoadSound(); // Play load sound when commanding torpedo fire
+      }
     }
   }
 
-  // Upgrade overlay keyboard shortcuts (1/2/3) and close (Esc/S)
+  // Upgrade overlay keyboard shortcuts (1/2/3/4) and close (Esc/S)
   if (upgradeOverlayOpen) {
     if (input.wasPressed('Digit1') || input.wasPressed('Numpad1')) {
       applyUpgradeRepair();
@@ -539,9 +604,16 @@ function loop(now: number) {
       applyUpgradeReinforce();
     } else if (input.wasPressed('Digit3') || input.wasPressed('Numpad3')) {
       applyUpgradeAddCannons();
+    } else if (input.wasPressed('Digit4') || input.wasPressed('Numpad4')) {
+      applyUpgradeTorpedo();
     } else if (input.wasPressed('Escape') || input.wasPressed('KeyS')) {
       closeUpgradeOverlay();
     }
+  }
+
+  // Close start screen with any key press
+  if (startScreenOpen && (input.wasPressed('KeyS') || input.wasPressed('Space') || input.wasPressed('ArrowUp') || input.wasPressed('ArrowDown') || input.wasPressed('ArrowLeft') || input.wasPressed('ArrowRight') || input.wasPressed('KeyT'))) {
+    closeStartScreen();
   }
 
   // Open shop with S (always allowed); close handled above when open
@@ -552,9 +624,9 @@ function loop(now: number) {
   // Auto-collect treasure when in pickup radius
   if (player && !player.isSinking) {
     for (const t of treasures) {
-      if (!t.collected && player.hitsCircle(t.pos, TREASURE_PICKUP_RADIUS)) {
+      if (!t.collected && player.hitsCircle(t.pos, Constants.TREASURE_PICKUP_RADIUS)) {
         t.collected = true;
-        addXP(40); // bonus for collecting treasure
+        addXP(t.xpValue); // bonus for collecting treasure (varies by size)
       }
     }
   }
@@ -569,6 +641,9 @@ let portDots: HTMLSpanElement[] = [];
 let starboardDots: HTMLSpanElement[] = [];
 let torpedoDots: HTMLSpanElement[] = [];
 let metricsEl: HTMLDivElement | null = null;
+
+// Score display (top right)
+let scoreEl: HTMLDivElement | null = null;
 
 function setupCannonHud(s: Ship) {
   const hud = document.getElementById('hud')!;
@@ -671,32 +746,28 @@ function updateMetricsHud(s: Ship) {
   metricsEl.textContent = `Pos: (${x}, ${y})\nSpeed: ${speed} px/s\nXP: ${xp}${shopHint}`;
 }
 
-function showRespawnLabel() {
-  if (!respawnLabelEl) {
-    const hud = document.getElementById('hud')!;
-    respawnLabelEl = document.createElement('div');
-    respawnLabelEl.id = 'respawn-label';
-    respawnLabelEl.style.marginTop = '8px';
-    respawnLabelEl.style.padding = '4px 8px';
-    respawnLabelEl.style.borderRadius = '6px';
-    respawnLabelEl.style.background = 'rgba(0,0,0,0.35)';
-    respawnLabelEl.style.border = '1px solid rgba(255,255,255,0.25)';
-    respawnLabelEl.style.display = 'inline-block';
-    hud.appendChild(respawnLabelEl);
+// Score display (top right)
+function setupScoreHud() {
+  if (!scoreEl) {
+    scoreEl = document.getElementById('score') as HTMLDivElement;
   }
-  respawnLabelEl.style.display = 'inline-block';
 }
 
-function updateRespawnLabel(timeLeft: number) {
-  if (!respawnLabelEl) return;
-  const secs = Math.ceil(timeLeft);
-  respawnLabelEl.textContent = `Respawning in ${secs}s...`;
+function updateScoreHud() {
+  if (!scoreEl) return;
+
+  const smallShips = gameStats.shipsSunk.regular;
+  const capitalShips = gameStats.shipsSunk.capital;
+  const displayTotalXP = Math.floor(totalXP);
+
+  scoreEl.innerHTML = `
+    <div class="stat"><span class="label">Small Ships:</span><span class="value">${smallShips}</span></div>
+    <div class="stat"><span class="label">Capital Ships:</span><span class="value">${capitalShips}</span></div>
+    <div class="stat"><span class="label">Total XP:</span><span class="value">${displayTotalXP}</span></div>
+  `;
 }
 
-function hideRespawnLabel() {
-  if (!respawnLabelEl) return;
-  respawnLabelEl.style.display = 'none';
-}
+// Removed respawn label functions - game over screen shows immediately on death
 
 function openUpgradeOverlay() {
   if (!upgradeOverlayEl) {
@@ -746,11 +817,11 @@ function openUpgradeOverlay() {
   };
   mkBtn(`1) Repair ship (+50% max) — ${Math.ceil(costRepairXP)} XP`, playerXP >= costRepairXP, applyUpgradeRepair);
   mkBtn(`2) Reinforce hull (+30 max & current) — ${Math.ceil(costReinforceXP)} XP`, playerXP >= costReinforceXP, applyUpgradeReinforce);
-  mkBtn(`3) Add cannons (+2 per side) — ${Math.ceil(costCannonsXP)} XP`, playerXP >= costCannonsXP, applyUpgradeAddCannons);
-  const torpLabel = torpedoTubes.length >= 4 ? '4) Torpedo tube — Max 4' : `4) Torpedo tube (press T) — ${TORPEDO_COST_XP} XP (Owned ${torpedoTubes.length}/4)`;
-  mkBtn(torpLabel, torpedoTubes.length < 4 && playerXP >= TORPEDO_COST_XP, applyUpgradeTorpedo);
+  mkBtn(`3) Add cannons (+1 per side) — ${Math.ceil(costCannonsXP)} XP`, playerXP >= costCannonsXP, applyUpgradeAddCannons);
+  const torpLabel = torpedoTubes.length >= 4 ? '4) Torpedo tube — Max 4' : `4) Torpedo tube (press T) — ${Math.ceil(costTorpedoXP)} XP (Owned ${torpedoTubes.length}/4)`;
+  mkBtn(torpLabel, torpedoTubes.length < 4 && playerXP >= costTorpedoXP, applyUpgradeTorpedo);
   const hint = document.createElement('div');
-  hint.textContent = 'Tip: press 1 / 2 / 3 to choose';
+  hint.textContent = 'Tip: press 1 / 2 / 3 / 4 to choose';
   hint.style.opacity = '0.8';
   hint.style.marginTop = '8px';
   hint.style.fontSize = '12px';
@@ -762,6 +833,365 @@ function openUpgradeOverlay() {
 function closeUpgradeOverlay() {
   upgradeOverlayOpen = false;
   if (upgradeOverlayEl) upgradeOverlayEl.style.display = 'none';
+}
+
+// Start screen upgrade functions (modified versions for start screen)
+function applyStartUpgradeReinforce() {
+  if (playerXP < costReinforceXP) return;
+  playerXP -= costReinforceXP;
+  player.maxHealth += 30;
+  player.health = player.maxHealth; // Start at full health
+  costReinforceXP = Math.ceil(costReinforceXP * Constants.XP_UPGRADE_INFLATION);
+  openStartScreen(); // Refresh the display
+}
+
+function applyStartUpgradeAddCannons() {
+  if (playerXP < costCannonsXP) return;
+  playerXP -= costCannonsXP;
+  player.addCannons(1); // 1 pair = 1 per side
+  costCannonsXP = Math.ceil(costCannonsXP * Constants.XP_UPGRADE_INFLATION);
+  openStartScreen(); // Refresh the display
+}
+
+function applyStartUpgradeTorpedo() {
+  if (torpedoTubes.length >= 4) return;
+  if (playerXP < costTorpedoXP) return;
+  playerXP -= costTorpedoXP;
+  torpedoTubes.push({ cooldown: 0, arming: 0 });
+  costTorpedoXP = Math.ceil(costTorpedoXP * Constants.XP_UPGRADE_INFLATION);
+  openStartScreen(); // Refresh the display
+}
+
+function openStartScreen() {
+  if (!startScreenEl) {
+    const hud = document.getElementById('hud')!;
+    startScreenEl = document.createElement('div');
+    startScreenEl.id = 'start-screen';
+    Object.assign(startScreenEl.style, {
+      position: 'fixed',
+      left: '50%',
+      top: '50%',
+      transform: 'translate(-50%, -50%)',
+      background: 'rgba(0,0,0,0.6)',
+      border: '1px solid rgba(255,255,255,0.35)',
+      padding: '20px',
+      borderRadius: '10px',
+      color: '#e6f0ff',
+      zIndex: '1000',
+      minWidth: '480px',
+      maxWidth: '600px',
+      textAlign: 'left',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+    } as CSSStyleDeclaration);
+    hud.appendChild(startScreenEl);
+  }
+
+  startScreenEl.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.textContent = '🏴‍☠️ Pirate Ship Battle';
+  title.style.fontWeight = 'bold';
+  title.style.marginBottom = '16px';
+  title.style.fontSize = '20px';
+  title.style.textAlign = 'center';
+  startScreenEl.appendChild(title);
+
+  // Create two-column layout
+  const mainContainer = document.createElement('div');
+  Object.assign(mainContainer.style, {
+    display: 'flex',
+    gap: '20px',
+    alignItems: 'flex-start'
+  } as CSSStyleDeclaration);
+
+  // Left column - Instructions
+  const leftColumn = document.createElement('div');
+  Object.assign(leftColumn.style, {
+    flex: '1',
+    minWidth: '200px'
+  } as CSSStyleDeclaration);
+
+  const instructions = document.createElement('div');
+  Object.assign(instructions.style, { display: 'flex', flexDirection: 'column', gap: '8px' } as CSSStyleDeclaration);
+
+  const addInstruction = (text: string) => {
+    const div = document.createElement('div');
+    div.textContent = text;
+    div.style.fontSize = '14px';
+    div.style.lineHeight = '1.4';
+    instructions.appendChild(div);
+  };
+
+  addInstruction('🎯 Destroy enemy ships to gain XP');
+
+  const controlsTitle = document.createElement('div');
+  controlsTitle.textContent = 'Controls:';
+  controlsTitle.style.fontWeight = 'bold';
+  controlsTitle.style.marginTop = '8px';
+  instructions.appendChild(controlsTitle);
+
+  addInstruction('↑↓←→ Move ship');
+  addInstruction('Space Fire cannons');
+  addInstruction('T Launch torpedo');
+  addInstruction('S Open shop in-game');
+
+  leftColumn.appendChild(instructions);
+
+  // Right column - Ship customization shop
+  const rightColumn = document.createElement('div');
+  Object.assign(rightColumn.style, {
+    flex: '1',
+    minWidth: '240px'
+  } as CSSStyleDeclaration);
+
+  const shopTitle = document.createElement('div');
+  shopTitle.textContent = `⚙️ Customize Your Ship — XP: ${Math.floor(playerXP)}`;
+  shopTitle.style.fontWeight = 'bold';
+  shopTitle.style.marginBottom = '12px';
+  shopTitle.style.fontSize = '14px';
+  rightColumn.appendChild(shopTitle);
+
+  const shopList = document.createElement('div');
+  Object.assign(shopList.style, { display: 'flex', flexDirection: 'column', gap: '6px' } as CSSStyleDeclaration);
+
+  const mkBtn = (label: string, enabled: boolean, onClick: () => void) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    Object.assign(btn.style, {
+      padding: '6px 8px',
+      borderRadius: '4px',
+      border: '1px solid rgba(255,255,255,0.4)',
+      background: enabled ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
+      color: enabled ? '#e6f0ff' : 'rgba(230,240,255,0.4)',
+      cursor: enabled ? 'pointer' : 'not-allowed',
+      fontSize: '12px',
+      textAlign: 'left'
+    } as CSSStyleDeclaration);
+    if (enabled) {
+      btn.addEventListener('click', () => { onClick(); });
+      btn.addEventListener('mouseenter', () => {
+        btn.style.background = 'rgba(255,255,255,0.2)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.background = 'rgba(255,255,255,0.12)';
+      });
+    }
+    shopList.appendChild(btn);
+  };
+
+  mkBtn(`Reinforce Hull (+30 HP) — ${Math.ceil(costReinforceXP)} XP`, playerXP >= costReinforceXP, applyStartUpgradeReinforce);
+  mkBtn(`Add Cannons (+1 per side) — ${Math.ceil(costCannonsXP)} XP`, playerXP >= costCannonsXP, applyStartUpgradeAddCannons);
+  const torpLabel = torpedoTubes.length >= 4 ? 'Torpedo Tube — Max 4' : `Torpedo Tube (press T) — ${Math.ceil(costTorpedoXP)} XP`;
+  mkBtn(torpLabel, torpedoTubes.length < 4 && playerXP >= costTorpedoXP, applyStartUpgradeTorpedo);
+
+  rightColumn.appendChild(shopList);
+
+  // Ship status display
+  const statusDiv = document.createElement('div');
+  statusDiv.style.marginTop = '12px';
+  statusDiv.style.fontSize = '12px';
+  statusDiv.style.opacity = '0.8';
+  statusDiv.style.lineHeight = '1.4';
+  statusDiv.innerHTML = `
+    <strong>Current Ship:</strong><br>
+    Health: ${Math.floor(player.health)}/${Math.floor(player.maxHealth)} HP<br>
+    Cannons: ${player.cannons.length} total<br>
+    Torpedoes: ${torpedoTubes.length}/4 tubes
+  `;
+  rightColumn.appendChild(statusDiv);
+
+  // Add columns to main container
+  mainContainer.appendChild(leftColumn);
+  mainContainer.appendChild(rightColumn);
+  startScreenEl.appendChild(mainContainer);
+
+  // Start button
+  const startBtn = document.createElement('button');
+  startBtn.textContent = 'Start Battle!';
+  Object.assign(startBtn.style, {
+    padding: '12px 20px',
+    borderRadius: '6px',
+    border: '1px solid rgba(255,255,255,0.4)',
+    background: 'rgba(34, 197, 94, 0.2)',
+    color: '#e6f0ff',
+    cursor: 'pointer',
+    marginTop: '20px',
+    fontSize: '16px',
+    fontWeight: 'bold',
+    width: '100%'
+  } as CSSStyleDeclaration);
+  startBtn.addEventListener('click', closeStartScreen);
+  startBtn.addEventListener('mouseenter', () => {
+    startBtn.style.background = 'rgba(34, 197, 94, 0.3)';
+  });
+  startBtn.addEventListener('mouseleave', () => {
+    startBtn.style.background = 'rgba(34, 197, 94, 0.2)';
+  });
+  startScreenEl.appendChild(startBtn);
+
+  const hint = document.createElement('div');
+  hint.textContent = 'Press any key to start or customize your ship above';
+  hint.style.opacity = '0.6';
+  hint.style.marginTop = '8px';
+  hint.style.fontSize = '12px';
+  hint.style.textAlign = 'center';
+  startScreenEl.appendChild(hint);
+
+  startScreenOpen = true;
+  startScreenEl.style.display = 'block';
+}
+
+function closeStartScreen() {
+  startScreenOpen = false;
+  if (startScreenEl) startScreenEl.style.display = 'none';
+
+  // Update HUD to reflect any start screen upgrades
+  setupCannonHud(player);
+}
+
+function openGameOverScreen() {
+  const hud = document.getElementById('hud')!;
+  if (!gameOverScreenEl) {
+    gameOverScreenEl = document.createElement('div');
+    gameOverScreenEl.id = 'game-over-screen';
+    Object.assign(gameOverScreenEl.style, {
+      position: 'fixed',
+      left: '50%',
+      top: '50%',
+      transform: 'translate(-50%, -50%)',
+      background: 'rgba(0,0,0,0.8)',
+      border: '1px solid rgba(255,255,255,0.35)',
+      padding: '30px',
+      borderRadius: '10px',
+      color: '#e6f0ff',
+      zIndex: '1000',
+      minWidth: '500px',
+      maxWidth: '700px',
+      textAlign: 'center',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.5)'
+    } as CSSStyleDeclaration);
+    hud.appendChild(gameOverScreenEl);
+  }
+
+  gameOverScreenEl.innerHTML = '';
+
+  // Title
+  const title = document.createElement('div');
+  title.textContent = '💀 Game Over';
+  title.style.fontWeight = 'bold';
+  title.style.marginBottom = '20px';
+  title.style.fontSize = '24px';
+  gameOverScreenEl.appendChild(title);
+
+  // Stats container
+  const statsContainer = document.createElement('div');
+  statsContainer.style.textAlign = 'left';
+  statsContainer.style.marginBottom = '30px';
+  statsContainer.style.fontSize = '16px';
+  statsContainer.style.lineHeight = '1.6';
+
+  // Calculate accuracies
+  const cannonAccuracy = gameStats.cannonShotsFired > 0 ?
+    Math.round((gameStats.cannonHits / gameStats.cannonShotsFired) * 100) : 0;
+  const torpedoAccuracy = gameStats.torpedoShotsFired > 0 ?
+    Math.round((gameStats.torpedoHits / gameStats.torpedoShotsFired) * 100) : 0;
+
+  statsContainer.innerHTML = `
+    <h3 style="margin: 0 0 15px 0; color: #fbbf24;">Combat Statistics</h3>
+    <div><strong>Cannon Accuracy:</strong> ${cannonAccuracy}% (${gameStats.cannonHits}/${gameStats.cannonShotsFired} shots hit)</div>
+    <div><strong>Torpedo Accuracy:</strong> ${torpedoAccuracy}% (${gameStats.torpedoHits}/${gameStats.torpedoShotsFired} shots hit)</div>
+    <div><strong>Ships Sunk:</strong></div>
+    <div style="margin-left: 20px;">• Regular Ships: ${gameStats.shipsSunk.regular}</div>
+    <div style="margin-left: 20px;">• Capital Ships: ${gameStats.shipsSunk.capital}</div>
+    <div style="margin-top: 10px;"><strong>Total Ships Sunk:</strong> ${gameStats.shipsSunk.regular + gameStats.shipsSunk.capital}</div>
+    <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.2);">
+      <strong style="font-size: 18px; color: #fbbf24;">Total Experience Earned: ${Math.floor(totalXP)} XP</strong>
+    </div>
+  `;
+
+  gameOverScreenEl.appendChild(statsContainer);
+
+  // Restart button
+  const restartBtn = document.createElement('button');
+  restartBtn.textContent = 'Restart Game';
+  Object.assign(restartBtn.style, {
+    padding: '15px 30px',
+    borderRadius: '8px',
+    border: '1px solid rgba(255,255,255,0.4)',
+    background: 'rgba(59, 130, 246, 0.2)',
+    color: '#e6f0ff',
+    cursor: 'pointer',
+    fontSize: '18px',
+    fontWeight: 'bold',
+    marginTop: '10px'
+  } as CSSStyleDeclaration);
+  restartBtn.addEventListener('click', restartGame);
+  restartBtn.addEventListener('mouseenter', () => {
+    restartBtn.style.background = 'rgba(59, 130, 246, 0.3)';
+  });
+  restartBtn.addEventListener('mouseleave', () => {
+    restartBtn.style.background = 'rgba(59, 130, 246, 0.2)';
+  });
+  gameOverScreenEl.appendChild(restartBtn);
+
+  gameOverScreenOpen = true;
+  gameOverScreenEl.style.display = 'block';
+}
+
+function closeGameOverScreen() {
+  gameOverScreenOpen = false;
+  if (gameOverScreenEl) gameOverScreenEl.style.display = 'none';
+}
+
+function restartGame() {
+  // Close game over screen
+  closeGameOverScreen();
+
+  // Reset game statistics
+  gameStats.cannonShotsFired = 0;
+  gameStats.cannonHits = 0;
+  gameStats.torpedoShotsFired = 0;
+  gameStats.torpedoHits = 0;
+  gameStats.shipsSunk.regular = 0;
+  gameStats.shipsSunk.capital = 0;
+
+  // Reset player XP and upgrade costs
+  playerXP = 400;
+  totalXP = 400; // Reset total XP to starting amount
+  costRepairXP = Constants.XP_UPGRADE_BASE_COST;
+  costReinforceXP = Constants.XP_UPGRADE_BASE_COST;
+  costCannonsXP = Constants.XP_UPGRADE_BASE_COST;
+  costTorpedoXP = Constants.XP_TORPEDO_COST;
+
+  // Reset torpedo tubes
+  torpedoTubes.length = 0;
+
+  // Clear all projectiles
+  projectiles.length = 0;
+
+  // Clear all treasures
+  treasures.length = 0;
+
+  // Clear all ships including any that might be sinking
+  ships.length = 0;
+
+  // Clear enemies
+  enemies.length = 0;
+
+  // Reset collision cooldowns
+  collisionCooldown.clear();
+
+  // Reset camera
+  camera.set(0, 0);
+
+  // Clear HUD elements
+  if (collectLabelEl) collectLabelEl.style.display = 'none';
+
+  // Reinitialize the game
+  initGame(shipSpriteRef);
+  startScreenOpen = true;
+  if (startScreenEl) startScreenEl.style.display = 'block';
+  openStartScreen();
 }
 
 function applyUpgradeRepair() {
@@ -780,7 +1210,7 @@ function applyUpgradeReinforce() {
   playerXP -= costReinforceXP;
   player.maxHealth += 30;
   scheduleHeal(30);
-  costReinforceXP = Math.ceil(costReinforceXP * UPGRADE_INFLATION);
+  costReinforceXP = Math.ceil(costReinforceXP * Constants.XP_UPGRADE_INFLATION);
   openUpgradeOverlay();
 }
 
@@ -788,18 +1218,19 @@ function applyUpgradeAddCannons() {
   if (!upgradeOverlayOpen) return;
   if (playerXP < costCannonsXP) return;
   playerXP -= costCannonsXP;
-  player.addCannons(2); // 2 pairs = 2 per side
+  player.addCannons(1); // 1 pair = 1 per side
   setupCannonHud(player);
-  costCannonsXP = Math.ceil(costCannonsXP * UPGRADE_INFLATION);
+  costCannonsXP = Math.ceil(costCannonsXP * Constants.XP_UPGRADE_INFLATION);
   openUpgradeOverlay();
 }
 
 function applyUpgradeTorpedo() {
   if (!upgradeOverlayOpen) return;
   if (torpedoTubes.length >= 4) return;
-  if (playerXP < TORPEDO_COST_XP) return;
-  playerXP -= TORPEDO_COST_XP;
+  if (playerXP < costTorpedoXP) return;
+  playerXP -= costTorpedoXP;
   torpedoTubes.push({ cooldown: 0, arming: 0 });
+  costTorpedoXP = Math.ceil(costTorpedoXP * Constants.XP_UPGRADE_INFLATION);
   // Refresh HUD to show added tube
   setupCannonHud(player);
   openUpgradeOverlay();
@@ -808,15 +1239,16 @@ function applyUpgradeTorpedo() {
 function addXP(amount: number) {
   if (!Number.isFinite(amount) || amount <= 0) return;
   playerXP += amount;
+  totalXP += amount;
 }
 
 function canAffordAnyUpgrade(): boolean {
-  return playerXP >= Math.min(costRepairXP, costReinforceXP, costCannonsXP);
+  return playerXP >= Math.min(costRepairXP, costReinforceXP, costCannonsXP, costTorpedoXP);
 }
 
 function scheduleHeal(amount: number) {
   if (amount <= 0) return;
-  healJobs.push({ remaining: amount, perSec: amount / SHOP_HEAL_DURATION_S });
+  healJobs.push({ remaining: amount, perSec: amount / Constants.SHOP_HEAL_DURATION_S });
 }
 
 // (Deprecated) Collect prompt helpers removed — treasure now auto-collects
@@ -828,9 +1260,13 @@ function respawnPlayer() {
   if (idx >= 0) ships.splice(idx, 1);
 
   // Create a fresh player ship
-  const newPlayer = new Ship({ length: 140, width: 48, cannonPairs: 8 }, shipSpriteRef);
+  const newPlayer = new Ship({
+    length: Constants.PLAYER_LENGTH_PX,
+    width: Constants.PLAYER_WIDTH_PX,
+    cannonPairs: Constants.PLAYER_CANNON_PAIRS
+  }, shipSpriteRef);
   newPlayer.isPlayer = true;
-  newPlayer.maxHealth = 140;
+  newPlayer.maxHealth = Constants.PLAYER_MAX_HEALTH;
   newPlayer.health = newPlayer.maxHealth;
   newPlayer.pos.set(0, 0);
   newPlayer.vel.set(0, 0);
@@ -852,9 +1288,9 @@ function respawnPlayer() {
 // Minimap in bottom-right showing player and other ships
 function drawMinimap(w: number, h: number) {
   if (!player) return;
-  const size = MINIMAP_SIZE_PX;
-  const margin = MINIMAP_MARGIN_PX;
-  const pad = MINIMAP_PAD_PX;
+  const size = Constants.MINIMAP_SIZE_PX;
+  const margin = Constants.MINIMAP_MARGIN_PX;
+  const pad = Constants.MINIMAP_PAD_PX;
   const x = w - size - margin;
   const y = h - size - margin;
   const inner = size - pad * 2;
@@ -884,6 +1320,13 @@ function drawMinimap(w: number, h: number) {
     ctx.arc(mx, my, s.isPlayer ? 4 : 3, 0, Math.PI * 2);
     if (s.isPlayer) {
       ctx.fillStyle = '#f59e0b';
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 1;
+      ctx.fill();
+      ctx.stroke();
+    } else if (s instanceof CapitalShip) {
+      // Capital ships show as purple in minimap
+      ctx.fillStyle = '#8b5cf6';
       ctx.strokeStyle = '#1f2937';
       ctx.lineWidth = 1;
       ctx.fill();
@@ -921,7 +1364,7 @@ function applyWorldBounds(s: Ship) {
   const maxX = WORLD.maxX - hullX;
   const minY = WORLD.minY + hullY;
   const maxY = WORLD.maxY - hullY;
-  const bounce = WORLD_BOUNDARY_BOUNCE;
+  const bounce = Constants.WORLD_BOUNDARY_BOUNCE;
   if (s.pos.x < minX) { s.pos.x = minX; if (s.vel.x < 0) s.vel.x *= -bounce; }
   if (s.pos.x > maxX) { s.pos.x = maxX; if (s.vel.x > 0) s.vel.x *= -bounce; }
   if (s.pos.y < minY) { s.pos.y = minY; if (s.vel.y < 0) s.vel.y *= -bounce; }
@@ -934,36 +1377,57 @@ function drawTreasures(w: number, h: number) {
     if (t.collected) continue;
     const sx = t.pos.x - camera.x + w / 2;
     const sy = t.pos.y - camera.y + h / 2;
-    // simple chest icon
+    const scale = t.size === 'large' ? 1.3 : 1.0;
+    const baseWidth = 20 * scale;
+    const baseHeight = 16 * scale;
+    const lidHeight = 8 * scale;
+
     ctx.save();
     ctx.translate(sx, sy);
+
     // pickup radius visualization
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 6]);
     ctx.beginPath();
-    ctx.arc(0, 0, TREASURE_PICKUP_RADIUS, 0, Math.PI * 2);
+    ctx.arc(0, 0, Constants.TREASURE_PICKUP_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-    // base
-    ctx.fillStyle = '#d97706';
+
+    // base (larger for capital ship treasures)
+    ctx.fillStyle = t.size === 'large' ? '#b45309' : '#d97706'; // Darker gold for large
     ctx.strokeStyle = '#92400e';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.rect(-10, -8, 20, 16);
+    ctx.rect(-baseWidth / 2, -baseHeight / 2, baseWidth, baseHeight);
     ctx.fill();
     ctx.stroke();
-    // lid
-    ctx.fillStyle = '#f59e0b';
+
+    // lid (larger for capital ship treasures)
+    ctx.fillStyle = t.size === 'large' ? '#d97706' : '#f59e0b'; // Brighter for large
     ctx.beginPath();
-    ctx.rect(-10, -12, 20, 8);
+    ctx.rect(-baseWidth / 2, -baseHeight / 2 - lidHeight / 2, baseWidth, lidHeight);
     ctx.fill();
     ctx.stroke();
-    // lock
+
+    // lock (larger for capital ship treasures)
     ctx.fillStyle = '#fbbf24';
+    const lockRadius = t.size === 'large' ? 3 : 2;
     ctx.beginPath();
-    ctx.arc(0, 0, 2, 0, Math.PI * 2);
+    ctx.arc(0, -baseHeight / 4, lockRadius, 0, Math.PI * 2);
     ctx.fill();
+
+    // Add golden glow effect for large treasures
+    if (t.size === 'large') {
+      ctx.shadowColor = '#fbbf24';
+      ctx.shadowBlur = 8;
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, Constants.TREASURE_PICKUP_RADIUS - 5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 }
@@ -971,7 +1435,7 @@ function drawTreasures(w: number, h: number) {
 // Resolve collisions between ships using simple elastic response with restitution
 function resolveShipCollisions(all: Ship[], dt: number) {
   const iterations = 2; // positional correction passes
-  const e = 0.2; // restitution (bounciness)
+  const e = Constants.COLLISION_RESTITUTION; // restitution (bounciness)
   for (let it = 0; it < iterations; it++) {
     for (let i = 0; i < all.length; i++) {
       for (let j = i + 1; j < all.length; j++) {
@@ -1012,7 +1476,7 @@ function resolveShipCollisions(all: Ship[], dt: number) {
           const rvy = b.vel.y - a.vel.y;
           const relNorm = rvx * nx + rvy * ny;
           if (relNorm < 0) {
-            const j = -(1 + COLLISION_RESTITUTION) * relNorm / (1 / ma + 1 / mb);
+            const j = -(1 + Constants.COLLISION_RESTITUTION) * relNorm / (1 / ma + 1 / mb);
             const impAx = -j * nx / ma;
             const impAy = -j * ny / ma;
             const impBx = j * nx / mb;
@@ -1024,7 +1488,7 @@ function resolveShipCollisions(all: Ship[], dt: number) {
             const tx = -ny, ty = nx; // tangent
             const relTan = rvx * tx + rvy * ty;
             const jt = -relTan / (1 / ma + 1 / mb);
-            const jtClamped = Math.max(-COLLISION_FRICTION * j, Math.min(COLLISION_FRICTION * j, jt));
+            const jtClamped = Math.max(-Constants.COLLISION_FRICTION * j, Math.min(Constants.COLLISION_FRICTION * j, jt));
             a.vel.x += (-jtClamped * tx) / ma; a.vel.y += (-jtClamped * ty) / ma;
             b.vel.x += (jtClamped * tx) / mb; b.vel.y += (jtClamped * ty) / mb;
 
@@ -1060,16 +1524,32 @@ function resolveShipCollisions(all: Ship[], dt: number) {
               }
               const prevA = a.health;
               const prevB = b.health;
-              a.takeDamage(dmgA);
-              b.takeDamage(dmgB);
-              // Award XP to player for damage dealt via ramming
-              if (a === player && dmgA > 0) addXP(dmgA);
-              if (b === player && dmgB > 0) addXP(dmgB);
-              if (a.health <= 0 && !a.isSinking) a.startSinking();
-              if (b.health <= 0 && !b.isSinking) b.startSinking();
-              if (a.health <= 0 && prevA > 0 && b === player) addXP(20);
-              if (b.health <= 0 && prevB > 0 && a === player) addXP(20);
-              collisionCooldown.set(key, RAM_DAMAGE_COOLDOWN_S);
+              a.takeDamage(dmgA, b === player); // a is attacked by b
+              b.takeDamage(dmgB, a === player); // b is attacked by a
+              // Award XP to player for damage dealt via ramming (reduced to 25%)
+              if (a === player && dmgA > 0) addXP(dmgA * 0.25);
+              if (b === player && dmgB > 0) addXP(dmgB * 0.25);
+              if (a.health <= 0 && !a.isSinking) {
+                a.startSinking();
+                // Play ship sinking sound
+                playShipSinkingSound(a === player, a instanceof CapitalShip, a.pos);
+                // If the player died, immediately show game over screen
+                if (a === player) {
+                  openGameOverScreen();
+                }
+              }
+              if (b.health <= 0 && !b.isSinking) {
+                b.startSinking();
+                // Play ship sinking sound
+                playShipSinkingSound(b === player, b instanceof CapitalShip, b.pos);
+                // If the player died, immediately show game over screen
+                if (b === player) {
+                  openGameOverScreen();
+                }
+              }
+              if (a.health <= 0 && prevA > 0 && b === player) addXP(Constants.XP_SINK_BONUS);
+              if (b.health <= 0 && prevB > 0 && a === player) addXP(Constants.XP_SINK_BONUS);
+              collisionCooldown.set(key, Constants.RAM_DAMAGE_COOLDOWN_S);
             }
           }
         }
@@ -1083,8 +1563,8 @@ function maintainShipsInView() {
   if (!player) return;
 
   const viewport = getViewportBounds(camera, canvas.width, canvas.height);
-  const minShipsInView = MIN_ENEMIES_IN_VIEW;
-  const maxTotalShips = MAX_ENEMIES_TOTAL;
+  const minShipsInView = Constants.MIN_ENEMIES_IN_VIEW;
+  const maxTotalShips = Constants.MAX_ENEMIES_TOTAL;
 
   // Count ships currently in view that are not sinking (excluding player)
   let shipsInView = 0;
@@ -1120,8 +1600,15 @@ function ensureAggressiveAI() {
   let count = 0;
   for (let i = 0; i < ai.length; i++) {
     const s = ai[i];
-    const makeAggressive = i < AGGRESSIVE_MIN_COUNT; // first N nearest
-    if (s.aggressive !== makeAggressive) s.aggressive = makeAggressive;
+    const makeAggressive = i < Constants.AGGRESSIVE_MIN_COUNT; // first N nearest
+    if (s.aggressive !== makeAggressive) {
+      s.aggressive = makeAggressive;
+      // Boost combat stats for aggressive ships
+      if (makeAggressive && !(s instanceof CapitalShip)) {
+        s.combatAggressiveness = 1.3; // Regular aggressive ships get moderate boost
+        s.pursuitPersistence = 1.4; // More persistent than passive ships
+      }
+    }
     if (makeAggressive) count++;
   }
 }

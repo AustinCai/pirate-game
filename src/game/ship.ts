@@ -1,3 +1,4 @@
+import { playCannonSound, playHitSound } from "../core/audio";
 import { Vec2 } from "../core/vector";
 import { Projectile } from "./projectile";
 
@@ -171,6 +172,16 @@ export class Ship {
         next = (next + i + 1) % count;
         if (side === 'port') { this.nextPort = next; this.fireTimerPort = this.interShotDelay; }
         else { this.nextStarboard = next; this.fireTimerStarboard = this.interShotDelay; }
+
+        // Play cannon fire sound effect
+        playCannonSound(this.isPlayer, this.pos);
+
+        // Track cannon shot for player
+        if (this.isPlayer) {
+          // Import the stat tracking function from main.ts
+          (window as any).trackCannonShot?.();
+        }
+
         return;
       }
     }
@@ -194,12 +205,41 @@ export class Ship {
       const scale = this.length / this.sprite.width;
       const drawW = this.sprite.width * scale;
       const drawH = this.sprite.height * scale;
-      ctx.drawImage(this.sprite, -drawW / 2, -drawH / 2, drawW, drawH);
+
+      // Check if this is an aggressive AI ship for red tinting
+      const aiShip = this as any;
+      const isAggressiveAI = aiShip.aggressive && !this.isPlayer && !this.isSinking;
+
+      if (isAggressiveAI) {
+        // Apply red tint to aggressive ships
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.globalAlpha = 0.3;
+        ctx.drawImage(this.sprite, -drawW / 2, -drawH / 2, drawW, drawH);
+
+        // Draw red tint overlay
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = '#ff4444';
+        ctx.fillRect(-drawW / 2, -drawH / 2, drawW, drawH);
+        ctx.restore();
+      } else {
+        // Normal drawing for non-aggressive ships
+        ctx.drawImage(this.sprite, -drawW / 2, -drawH / 2, drawW, drawH);
+      }
     } else {
       // Fallback hull if no sprite available yet
       // Turn grey when sinking
-      const baseColor = this.isSinking ? '#666666' : '#5b3b1a';
-      const strokeColor = this.isSinking ? '#333333' : '#2c1b0b';
+      const aiShip = this as any;
+      const isAggressiveAI = aiShip.aggressive && !this.isPlayer && !this.isSinking;
+
+      let baseColor = this.isSinking ? '#666666' : '#5b3b1a';
+      let strokeColor = this.isSinking ? '#333333' : '#2c1b0b';
+
+      // Apply red tint to aggressive AI ships
+      if (isAggressiveAI) {
+        baseColor = this.isSinking ? '#994444' : '#8b4513'; // Red-tinted versions
+        strokeColor = this.isSinking ? '#662222' : '#5a2a0a';
+      }
 
       ctx.fillStyle = baseColor;
       ctx.strokeStyle = strokeColor;
@@ -213,13 +253,12 @@ export class Ship {
       ctx.fill();
       ctx.lineWidth = 2; ctx.stroke();
     }
+
     ctx.restore();
 
     // Reset global alpha
     ctx.globalAlpha = 1.0;
 
-    // Draw debug hitbox (polygon outline)
-    this.drawDebugHitbox(ctx, camera, w, h);
 
     // health bar (don't show when sinking)
     if (!this.isSinking) {
@@ -302,8 +341,12 @@ export class Ship {
     ctx.restore();
   }
 
-  takeDamage(dmg: number) {
+  takeDamage(dmg: number, attackerIsPlayer?: boolean) {
     this.health = Math.max(0, this.health - dmg);
+
+    // Play hit sound based on who is hitting whom
+    const attackerPlayer = attackerIsPlayer ?? false; // Default to false for ship collisions
+    playHitSound(this.isPlayer, attackerPlayer, this.pos);
   }
 
   startSinking() {

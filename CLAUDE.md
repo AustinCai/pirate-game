@@ -11,58 +11,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Architecture
 
-This is a TypeScript HTML5 Canvas pirate ship game built with Vite. The architecture follows a clean object-oriented design with separate system responsibilities:
+This is a TypeScript HTML5 Canvas pirate ship game built with Vite. The architecture uses a monolithic game loop with object-oriented entity design:
 
 ### Core Engine (`src/core/`)
-- **GameEngine**: Main orchestrator class that coordinates all systems and handles the game loop (`game-engine.ts`)
-- **EntityManager**: Manages all game entities (ships, projectiles) and their lifecycle (`entity-manager.ts`)
-- **Camera**: Viewport management and world-to-screen coordinate conversion (`camera.ts`)
-- **GameWorld**: World boundaries, physics rules, and spatial constraints (`game-world.ts`)
-- **Vector Math**: `Vec2` class for 2D operations (`vector.ts`)
-- **Input Handling**: Keyboard input management (`input.ts`)
+- **Vector Math**: `Vec2` class for 2D operations - essential for all spatial calculations (`vector.ts`)
+- **Input Handling**: Keyboard input management with frame-based press detection (`input.ts`)
 - **Asset Loading**: Image asset loading utilities (`assets.ts`)
-- **Interfaces**: TypeScript interfaces for better code organization (`interfaces.ts`)
-
-### Game Systems (`src/systems/`)
-- **CollisionSystem**: Handles all collision detection and resolution with realistic physics (`collision-system.ts`)
+- **Audio System**: HTML5 audio management with sound effect coordination (`audio.ts`)
+- **Constants**: Centralized gameplay configuration including ship stats, AI behavior, and game rules (`constants.ts`)
 
 ### Game Logic (`src/game/`)
-- **Ship System**: Base `Ship` class with physics, cannon management, and polygon-based collision detection (`ship.ts`)
-- **AI Ships**: `AIShip` extends `Ship` with behavior states (patrol, aggressive, flee) (`ai-ship.ts`)
-- **Projectiles**: Base `Projectile` class and specialized `Torpedo` class for different ammunition types
+- **Ship System**: Base `Ship` class with realistic ship physics, sequential cannon firing, and polygon-based collision detection (`ship.ts`)
+- **AI Ships**: `AIShip` extends `Ship` with sophisticated AI states (aggressive, roaming) and predictive collision avoidance (`ai-ship.ts`)
+- **Capital Ships**: `CapitalShip` extends `AIShip` with enhanced stats and special behaviors (`capital-ship.ts`)
+- **Projectiles**: Base `Projectile` class and specialized `Torpedo` class with different damage and physics (`projectile.ts`, `torpedo.ts`)
 
-### UI System (`src/ui/`)
-- **HUDSystem**: Manages all UI elements including health bars, cannon indicators, minimap, and overlays (`hud-system.ts`)
-
-### Main Entry Point (`src/main.ts`)
-- Simplified bootstrap file that creates the GameEngine and starts the game
-- All game logic is now properly encapsulated in the engine and system classes
+### Main Game Loop (`src/main.ts`)
+- Monolithic main file containing the complete game state, physics simulation, and rendering
+- Handles player respawn system, treasure collection, upgrade shop, and HUD management
+- All game systems are implemented directly in the main game loop rather than separate system classes
 
 ## Key Design Patterns
 
-- **Separation of Concerns**: Each system has a single, well-defined responsibility
-- **Object-Oriented Design**: Clean class hierarchy with proper encapsulation and interfaces
-- **System Architecture**: Game engine coordinates independent systems (collision, entities, camera, etc.)
-- **Entity Management**: Centralized entity lifecycle management with type safety
-- **Sequential Cannon Firing**: Cannons fire in sequence along the hull for realistic broadsides
+- **Object-Oriented Design**: Clean class hierarchy with `Ship` base class extended by `AIShip` and `CapitalShip`
+- **Sequential Cannon Firing**: Cannons fire in sequence along the hull for realistic broadsides with per-side timing
 - **Polygon-Based Collision**: Ships use hull polygons rather than simple circles for accurate hit detection
-- **State-Based AI**: AI ships switch between patrol, aggressive, and flee behaviors based on distance and health
-- **Component-Based UI**: HUD system manages different UI components independently
+- **State-Based AI**: AI ships switch between aggressive and roaming behaviors with predictive collision avoidance
+- **Monolithic Game Loop**: All game logic centralized in `main.ts` with direct entity management
+- **Configuration-Driven**: Extensive use of constants for easy game balancing and tweaking
 
 ## Game Constants & Tuning
 
-All gameplay constants are centralized in the GameEngine's `createGameConfig()` method:
-- Ship physics (thrust, drag, turn rates) 
-- AI behavior parameters (spawn distances, aggression counts)
-- Weapon systems (reload times, damage, torpedo mechanics)
-- World dimensions and camera behavior
-- Progression system (XP costs, upgrade mechanics)
+All gameplay constants are centralized in `src/core/constants.ts`:
+- **Ship Physics**: Thrust, drag, turn rates, and health stats for player, AI, and capital ships
+- **AI Behavior**: Fire ranges, desired distances, edge avoidance margins, and aggression settings
+- **Experience System**: XP rewards, shop costs, and upgrade inflation rates  
+- **World Configuration**: Boundaries, camera behavior, spawn patterns, and population limits
+- **Combat Systems**: Torpedo mechanics, collision physics, and damage calculations
 
 ## Asset Structure
 
-- `public/ship.webp`: Optional ship sprite (falls back to vector hull if missing)
+- `public/ship.webp`: Optional ship sprite (falls back to vector hull drawing if missing)
+- `public/*.mp3`: Audio files for cannon fire, hits, and torpedo sounds
 - `index.html`: Canvas setup and HUD containers
-- Game renders to full-screen canvas with overlay HUD elements
+- Game renders to full-screen canvas with overlay HUD elements positioned via CSS
+
+## Core Game Mechanics
+
+- **Ship Physics**: Momentum-based sailing with separate linear/angular drag and speed-dependent turning
+- **Combat System**: Side-based broadside cannons with sequential firing and individual reload timers
+- **AI Behaviors**: Ships dynamically switch between aggressive (pursue player) and roaming (wander safely) states
+- **Experience & Upgrades**: Gain XP from damage/kills to purchase ship improvements (repair, hull, cannons, torpedoes)
+- **Collision System**: Realistic ship-to-ship physics with ramming damage based on relative velocity and impact angle
+- **World Boundaries**: Finite map with soft bouncing and AI edge avoidance
 
 ## Testing
 

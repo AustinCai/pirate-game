@@ -1,3 +1,4 @@
+import * as Constants from '../core/constants';
 import { Vec2 } from '../core/vector';
 import { Projectile } from './projectile';
 import { Ship, type ShipOptions } from './ship';
@@ -11,22 +12,25 @@ export interface WorldBounds { minX: number; maxX: number; minY: number; maxY: n
 // =========================
 // AI Behavior Constants
 // =========================
-export const AI_DEFAULT_FIRE_RANGE = 520;
-export const AI_DEFAULT_DESIRED_DISTANCE = 320;
-export const AI_COLLISION_LOOKAHEAD_S = 2.5;
-export const AI_DESIRED_SEPARATION_MULT = 1.6; // separation ~ 1.6x ship length
-export const AI_EDGE_AVOID_MARGIN_PX = 800;
-export const AI_WANDER_SAFE_PAD_PX = 600;
-export const AI_WANDER_REACH_RADIUS_PX = 150;
-export const AI_WANDER_TIME_MIN_S = 6;
-export const AI_WANDER_TIME_MAX_S = 12;
+export const AI_DEFAULT_FIRE_RANGE = Constants.AI_DEFAULT_FIRE_RANGE;
+export const AI_DEFAULT_DESIRED_DISTANCE = Constants.AI_DEFAULT_DESIRED_DISTANCE;
+export const AI_COLLISION_LOOKAHEAD_S = Constants.AI_COLLISION_LOOKAHEAD_S;
+export const AI_DESIRED_SEPARATION_MULT = Constants.AI_DESIRED_SEPARATION_MULT;
+export const AI_EDGE_AVOID_MARGIN_PX = Constants.AI_EDGE_AVOID_MARGIN_PX;
+export const AI_WANDER_SAFE_PAD_PX = Constants.AI_WANDER_SAFE_PAD_PX;
+export const AI_WANDER_REACH_RADIUS_PX = Constants.AI_WANDER_REACH_RADIUS_PX;
+export const AI_WANDER_TIME_MIN_S = Constants.AI_WANDER_TIME_MIN_S;
+export const AI_WANDER_TIME_MAX_S = Constants.AI_WANDER_TIME_MAX_S;
 
 export class AIShip extends Ship {
   target: Ship;
   preferredSide: 'port' | 'starboard';
-  fireRange = AI_DEFAULT_FIRE_RANGE;
-  desiredDistance = AI_DEFAULT_DESIRED_DISTANCE;
+  fireRange = Constants.AI_DEFAULT_FIRE_RANGE;
+  desiredDistance = Constants.AI_DEFAULT_DESIRED_DISTANCE;
   aggressive = false;
+  edgeAvoidStrength = 1.0; // Multiplier for edge avoidance strength
+  combatAggressiveness = 1.0; // Multiplier for combat behavior intensity
+  pursuitPersistence = 1.0; // Multiplier for how persistent in pursuit
   private wanderTarget: Vec2 | null = null;
   private wanderTimer = 0;
 
@@ -49,13 +53,44 @@ export class AIShip extends Ship {
     let diffBroad = normalizeAngle(dirToTarget - rightAngle);
     if (this.preferredSide === 'port') diffBroad = normalizeAngle(diffBroad + Math.PI); // invert side preference
 
-    // Aggressive nose-on blend to encourage ramming when close
+    // Improved aggressive behavior with better player prediction
     const diffNose = normalizeAngle(dirToTarget - this.angle);
-    const closeBlend = this.aggressive ? Math.max(0, Math.min(1, (220 - dist) / 220)) * 0.85 : 0;
+
+    // More sophisticated blending based on distance and speed
+    let closeBlend = 0;
+    if (this.aggressive) {
+      // Base close blend on distance
+      const baseBlend = Math.max(0, Math.min(1, (280 - dist) / 280));
+
+      // Increase blend when player is moving fast (they're trying to escape)
+      const playerSpeed = this.target.vel.len();
+      const speedFactor = Math.min(1, playerSpeed / 100); // Max effect at 100+ speed
+      closeBlend = baseBlend * (0.6 + speedFactor * 0.4); // 0.6 to 1.0 multiplier
+
+      // Extra aggression when very close (for ramming)
+      if (dist < 150) {
+        closeBlend = Math.min(1, closeBlend + 0.3);
+      }
+    }
+
     let diff = normalizeAngle(diffBroad * (1 - closeBlend) + diffNose * closeBlend);
 
+    // Add player movement prediction for better pursuit
+    if (this.aggressive && dist > 50) {
+      const playerVel = this.target.vel;
+      const predictionTime = Math.min(2.0, dist / 200); // Predict 0.5-2 seconds ahead
+      const predictedPos = Vec2.add(this.target.pos, Vec2.scale(playerVel, predictionTime));
+      const toPredicted = Vec2.sub(predictedPos, this.pos);
+      const predictedAngle = Math.atan2(toPredicted.y, toPredicted.x);
+      const predictedDiff = normalizeAngle(predictedAngle - this.angle);
+
+      // Blend current and predicted target (favor prediction when player is moving)
+      const predictionWeight = Math.min(0.4, playerVel.len() / 150);
+      diff = normalizeAngle(diff * (1 - predictionWeight) + predictedDiff * predictionWeight);
+    }
+
     // Separation and predictive collision avoidance
-    const desiredSep = Math.max(160, this.length * AI_DESIRED_SEPARATION_MULT);
+    const desiredSep = Math.max(160, this.length * Constants.AI_DESIRED_SEPARATION_MULT);
     const sep = new Vec2(0, 0);
     const avoid = new Vec2(0, 0);
     let minNeighbor = Infinity;
@@ -79,7 +114,7 @@ export class AIShip extends Ship {
       const vRel2 = vRel.dot(vRel);
       if (vRel2 > 1e-6) {
         const t = -toO.dot(vRel) / vRel2; // time of closest approach (seconds)
-        const horizon = AI_COLLISION_LOOKAHEAD_S; // lookahead seconds
+        const horizon = Constants.AI_COLLISION_LOOKAHEAD_S; // lookahead seconds
         if (t > 0 && t < horizon) {
           // position of other at closest approach relative to us
           const closest = Vec2.add(toO, Vec2.scale(vRel, t));
@@ -94,52 +129,125 @@ export class AIShip extends Ship {
         }
       }
     }
-    // Edge avoidance: repulse from world edges within a margin
-    const edgeMargin = AI_EDGE_AVOID_MARGIN_PX;
+    // Edge avoidance: repulse from world edges within a margin (always active)
+    const edgeMargin = Constants.AI_EDGE_AVOID_MARGIN_PX;
     const addAvoid = (vx: number, vy: number, w: number) => { avoid.x += vx * w; avoid.y += vy * w; };
     const leftDist = this.pos.x - world.minX;
     const rightDist = world.maxX - this.pos.x;
     const topDist = this.pos.y - world.minY;
     const bottomDist = world.maxY - this.pos.y;
-    if (leftDist < edgeMargin) addAvoid(1, 0, sqr(1 - leftDist / edgeMargin));
-    if (rightDist < edgeMargin) addAvoid(-1, 0, sqr(1 - rightDist / edgeMargin));
-    if (topDist < edgeMargin) addAvoid(0, 1, sqr(1 - topDist / edgeMargin));
-    if (bottomDist < edgeMargin) addAvoid(0, -1, sqr(1 - bottomDist / edgeMargin));
+
+    // Calculate edge avoidance strength (stronger when closer to edge)
+    let maxEdgeAvoidStrength = 0;
+    if (leftDist < edgeMargin) {
+      const strength = Math.pow(1 - leftDist / edgeMargin, 2) * this.edgeAvoidStrength;
+      addAvoid(1, 0, strength * 2.0); // Push right
+      maxEdgeAvoidStrength = Math.max(maxEdgeAvoidStrength, strength);
+    }
+    if (rightDist < edgeMargin) {
+      const strength = Math.pow(1 - rightDist / edgeMargin, 2) * this.edgeAvoidStrength;
+      addAvoid(-1, 0, strength * 2.0); // Push left
+      maxEdgeAvoidStrength = Math.max(maxEdgeAvoidStrength, strength);
+    }
+    if (topDist < edgeMargin) {
+      const strength = Math.pow(1 - topDist / edgeMargin, 2) * this.edgeAvoidStrength;
+      addAvoid(0, 1, strength * 2.0); // Push down
+      maxEdgeAvoidStrength = Math.max(maxEdgeAvoidStrength, strength);
+    }
+    if (bottomDist < edgeMargin) {
+      const strength = Math.pow(1 - bottomDist / edgeMargin, 2) * this.edgeAvoidStrength;
+      addAvoid(0, -1, strength * 2.0); // Push up
+      maxEdgeAvoidStrength = Math.max(maxEdgeAvoidStrength, strength);
+    }
+
     // Combine avoidance influences into heading bias
     const rvx = Math.cos(rightAngle), rvy = Math.sin(rightAngle);
     const avoidVec = new Vec2(sep.x + avoid.x, sep.y + avoid.y);
     if (avoidVec.len() > 1e-3) {
       const avoidDotRight = avoidVec.x * rvx + avoidVec.y * rvy; // >0 means steer right
       const avoidScale = this.aggressive ? 0.5 : 1.0;
-      const avoidTerm = Math.max(-0.7, Math.min(0.7, avoidDotRight)) * avoidScale;
+      const avoidTerm = Math.max(-0.8, Math.min(0.8, avoidDotRight)) * avoidScale;
       diff = normalizeAngle(diff + avoidTerm);
+    }
+
+    // Always apply some edge avoidance even without collision avoidance
+    const minEdgeDist = Math.min(leftDist, rightDist, topDist, bottomDist);
+    if (minEdgeDist < edgeMargin * 0.8) { // Start avoiding when within 80% of edge margin
+      // Calculate direction away from nearest edge
+      let edgeAvoidX = 0, edgeAvoidY = 0;
+      if (leftDist <= minEdgeDist + 10) edgeAvoidX = 1; // Push right
+      if (rightDist <= minEdgeDist + 10) edgeAvoidX = -1; // Push left
+      if (topDist <= minEdgeDist + 10) edgeAvoidY = 1; // Push down
+      if (bottomDist <= minEdgeDist + 10) edgeAvoidY = -1; // Push up
+
+      if (edgeAvoidX !== 0 || edgeAvoidY !== 0) {
+        const edgeAvoidAngle = Math.atan2(edgeAvoidY, edgeAvoidX);
+        const edgeAvoidTerm = normalizeAngle(edgeAvoidAngle - this.angle);
+        diff = normalizeAngle(diff + edgeAvoidTerm * 0.3 * this.edgeAvoidStrength); // Moderate edge avoidance with strength multiplier
+      }
     }
 
     let fire = false;
     let turnRight = false, turnLeft = false, up = false, down = false;
     if (this.aggressive) {
-      // Aggressive: engage player with broadside/ramming blend
-      turnRight = diff > 0.1;
-      turnLeft = diff < -0.1;
-      const desiredDist = Math.max(140, this.desiredDistance * 0.6);
-      const needSpeed = dist < desiredDist * 0.8 ? -1 : (dist > desiredDist * 1.2 ? 1 : 0);
-      up = needSpeed > 0 || this.vel.len() < this.maxSpeed * 0.35;
+      // Aggressive: engage player with improved tracking and combat effectiveness
+      // Adaptive turning sensitivity based on combat aggressiveness
+      const turnThreshold = 0.06 / this.combatAggressiveness; // More aggressive ships turn more sharply
+      turnRight = diff > turnThreshold;
+      turnLeft = diff < -turnThreshold;
+
+      // Improved distance management with combat aggressiveness multiplier
+      const desiredDist = Math.max(100, this.desiredDistance * (0.4 / this.combatAggressiveness)); // Closer engagement based on aggressiveness
+      const closeRange = desiredDist * (0.5 / this.combatAggressiveness); // More aggressive ships get closer
+      const farRange = desiredDist * (1.2 * this.combatAggressiveness);   // Less aggressive ships keep more distance
+
+      let needSpeed = 0;
+      if (dist < closeRange) {
+        // Too close - back away slightly for better positioning
+        needSpeed = -0.6 * this.combatAggressiveness;
+      } else if (dist > farRange) {
+        // Too far - close in aggressively
+        needSpeed = 1.4 * this.combatAggressiveness;
+      } else if (dist > desiredDist) {
+        // Slightly far - moderate approach
+        needSpeed = 0.7 * this.combatAggressiveness;
+      } else {
+        // Good range - maintain speed or slight adjustment
+        needSpeed = this.vel.len() < this.maxSpeed * 0.35 ? 0.4 * this.combatAggressiveness : 0;
+      }
+
+      up = needSpeed > 0 || this.vel.len() < this.maxSpeed * 0.25;
       down = needSpeed < 0;
-      if (minNeighbor < desiredSep * 0.6) { up = false; down = true; }
-      if (onCollisionCourse) { up = false; down = true; }
-      const range = this.fireRange * 1.15;
-      const aligned = Math.abs(diff) < 0.25;
-      fire = aligned && dist <= range;
+
+      // Collision and edge avoidance (less restrictive for aggressive ships)
+      if (minNeighbor < desiredSep * 0.4) { up = false; down = true; } // More restrictive collision avoidance
+      if (onCollisionCourse && dist > 100) { up = false; down = true; } // Only avoid if not very close to player
+
+      // Less restrictive edge avoidance for aggressive ships (they prioritize combat)
+      const edgeNearAggressive = minEdgeDist < edgeMargin * 0.3; // Reduced from 0.5
+      if (edgeNearAggressive && dist > 200) { up = false; down = true; } // Only if far from player
+
+      // Enhanced firing logic with combat aggressiveness
+      const range = this.fireRange * (1.1 + this.combatAggressiveness * 0.3); // Extended range for aggressive ships
+      const alignmentThreshold = 0.18 / this.combatAggressiveness; // More aggressive ships are more accurate
+      const aligned = Math.abs(diff) < alignmentThreshold;
+
+      // More aggressive firing conditions
+      const minRange = Math.max(60, 100 / this.combatAggressiveness); // Aggressive ships fire closer
+      const goodRange = dist <= range && dist >= minRange;
+      const speedAdvantage = this.vel.len() > this.target.vel.len() * 0.8; // Fire when we have speed advantage
+
+      fire = aligned && goodRange && (speedAdvantage || dist < 200); // Always fire when close
     } else {
       // Roaming: wander to random targets inside safe bounds, avoid edges
       this.wanderTimer -= dt;
-      const safePad = AI_WANDER_SAFE_PAD_PX;
-      const needNew = !this.wanderTarget || this.wanderTimer <= 0 || Vec2.sub(this.wanderTarget, this.pos).len() < AI_WANDER_REACH_RADIUS_PX;
+      const safePad = Constants.AI_WANDER_SAFE_PAD_PX;
+      const needNew = !this.wanderTarget || this.wanderTimer <= 0 || Vec2.sub(this.wanderTarget, this.pos).len() < Constants.AI_WANDER_REACH_RADIUS_PX;
       if (needNew) {
         const tx = randRange(world.minX + safePad, world.maxX - safePad);
         const ty = randRange(world.minY + safePad, world.maxY - safePad);
         this.wanderTarget = new Vec2(tx, ty);
-        this.wanderTimer = AI_WANDER_TIME_MIN_S + Math.random() * (AI_WANDER_TIME_MAX_S - AI_WANDER_TIME_MIN_S);
+        this.wanderTimer = Constants.AI_WANDER_TIME_MIN_S + Math.random() * (Constants.AI_WANDER_TIME_MAX_S - Constants.AI_WANDER_TIME_MIN_S);
       }
       const toWander = this.wanderTarget ? Vec2.sub(this.wanderTarget, this.pos) : new Vec2(0, 0);
       const dirWander = Math.atan2(toWander.y, toWander.x);
@@ -153,9 +261,9 @@ export class AIShip extends Ship {
       turnLeft = diffWander < -0.08;
       const targetSpeed = 0.5 * this.maxSpeed + 0.5 * this.maxSpeed * Math.random();
       up = this.vel.len() < targetSpeed;
-      // slow down when too close to edge
-      const edgeNear = Math.min(leftDist, rightDist, topDist, bottomDist) < 400;
-      if (edgeNear || onCollisionCourse || minNeighbor < desiredSep * 0.6) { up = false; down = true; }
+      // Slow down when too close to edge (for roaming ships)
+      const edgeNearRoaming = minEdgeDist < edgeMargin * 0.6; // 60% of edge margin
+      if (edgeNearRoaming || onCollisionCourse || minNeighbor < desiredSep * 0.6) { up = false; down = true; }
       fire = false; // roamers do not fire by default
     }
 
