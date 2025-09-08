@@ -33,6 +33,8 @@ export class AIShip extends Ship {
   pursuitPersistence = 1.0; // Multiplier for how persistent in pursuit
   private wanderTarget: Vec2 | null = null;
   private wanderTimer = 0;
+  private lastDamageTime = 0; // Time when last damage was taken
+  protected passiveTimeout = 10.0; // Seconds without damage before becoming passive
 
   constructor(target: Ship, opts: { ship?: ShipOptions; ai?: AIOptions; sprite?: HTMLImageElement } = {}) {
     super(opts.ship ?? {}, opts.sprite);
@@ -40,7 +42,28 @@ export class AIShip extends Ship {
     this.preferredSide = opts.ai?.preferredSide ?? (Math.random() < 0.5 ? 'port' : 'starboard');
   }
 
+  takeDamage(dmg: number, attackerIsPlayer?: boolean) {
+    // Call parent method first
+    super.takeDamage(dmg, attackerIsPlayer);
+
+    // Become aggressive when taking damage
+    if (dmg > 0) {
+      this.aggressive = true;
+      this.lastDamageTime = Date.now() / 1000; // Current time in seconds
+    }
+  }
+
   updateAI(dt: number, projectiles: Projectile[], neighbors: Ship[], world: WorldBounds) {
+    // Check if we should become passive again (10 seconds without damage)
+    // Capital ships (passiveTimeout = -1) never become passive
+    if (this.aggressive && this.lastDamageTime > 0 && this.passiveTimeout > 0) {
+      const currentTime = Date.now() / 1000;
+      if (currentTime - this.lastDamageTime >= this.passiveTimeout) {
+        this.aggressive = false;
+        this.lastDamageTime = 0;
+      }
+    }
+
     // Simple helmsman: try to keep target at broadside on preferredSide and orbit at desiredDistance
     const toTarget = Vec2.sub(this.target.pos, this.pos);
     const dist = toTarget.len();
@@ -129,13 +152,37 @@ export class AIShip extends Ship {
         }
       }
     }
-    // Edge avoidance: repulse from world edges within a margin (always active)
+    // Edge avoidance and center preference: repulse from world edges within a margin (always active)
     const edgeMargin = Constants.AI_EDGE_AVOID_MARGIN_PX;
+    const centerMargin = edgeMargin * 1.5; // Start center-seeking earlier than edge avoidance
     const addAvoid = (vx: number, vy: number, w: number) => { avoid.x += vx * w; avoid.y += vy * w; };
     const leftDist = this.pos.x - world.minX;
     const rightDist = world.maxX - this.pos.x;
     const topDist = this.pos.y - world.minY;
     const bottomDist = world.maxY - this.pos.y;
+
+    // Calculate world center and distance from center
+    const worldCenterX = (world.minX + world.maxX) / 2;
+    const worldCenterY = (world.minY + world.maxY) / 2;
+    const distFromCenter = Math.sqrt(
+      Math.pow(this.pos.x - worldCenterX, 2) +
+      Math.pow(this.pos.y - worldCenterY, 2)
+    );
+    const maxDistFromCenter = Math.sqrt(
+      Math.pow((world.maxX - world.minX) / 2, 2) +
+      Math.pow((world.maxY - world.minY) / 2, 2)
+    );
+
+    // Center-seeking bias: stronger when farther from center
+    const centerStrength = Math.max(0, (distFromCenter / maxDistFromCenter) - 0.3); // Start center-seeking when 30% from edge
+    if (centerStrength > 0) {
+      const toCenterX = worldCenterX - this.pos.x;
+      const toCenterY = worldCenterY - this.pos.y;
+      const centerDist = Math.sqrt(toCenterX * toCenterX + toCenterY * toCenterY);
+      if (centerDist > 0) {
+        addAvoid(toCenterX / centerDist, toCenterY / centerDist, centerStrength * 0.5 * this.edgeAvoidStrength);
+      }
+    }
 
     // Calculate edge avoidance strength (stronger when closer to edge)
     let maxEdgeAvoidStrength = 0;
@@ -212,20 +259,20 @@ export class AIShip extends Ship {
         // Slightly far - moderate approach
         needSpeed = 0.7 * this.combatAggressiveness;
       } else {
-        // Good range - maintain speed or slight adjustment
-        needSpeed = this.vel.len() < this.maxSpeed * 0.35 ? 0.4 * this.combatAggressiveness : 0;
+        // Good range - aggressive ships always maintain some movement
+        needSpeed = this.vel.len() < this.maxSpeed * 0.6 ? 0.3 * this.combatAggressiveness : 0.1 * this.combatAggressiveness;
       }
 
-      up = needSpeed > 0 || this.vel.len() < this.maxSpeed * 0.25;
+      up = needSpeed > 0 || this.vel.len() < this.maxSpeed * 0.5; // Aggressive ships maintain higher minimum speed
       down = needSpeed < 0;
 
       // Collision and edge avoidance (less restrictive for aggressive ships)
       if (minNeighbor < desiredSep * 0.4) { up = false; down = true; } // More restrictive collision avoidance
       if (onCollisionCourse && dist > 100) { up = false; down = true; } // Only avoid if not very close to player
 
-      // Less restrictive edge avoidance for aggressive ships (they prioritize combat)
-      const edgeNearAggressive = minEdgeDist < edgeMargin * 0.3; // Reduced from 0.5
-      if (edgeNearAggressive && dist > 200) { up = false; down = true; } // Only if far from player
+      // More restrictive edge avoidance for aggressive ships (balance combat with safety)
+      const edgeNearAggressive = minEdgeDist < edgeMargin * 0.5; // Increased from 0.3 for better safety
+      if (edgeNearAggressive && dist > 150) { up = false; down = true; } // Only if reasonably far from player
 
       // Enhanced firing logic with combat aggressiveness
       const range = this.fireRange * (1.1 + this.combatAggressiveness * 0.3); // Extended range for aggressive ships
@@ -237,7 +284,7 @@ export class AIShip extends Ship {
       const goodRange = dist <= range && dist >= minRange;
       const speedAdvantage = this.vel.len() > this.target.vel.len() * 0.8; // Fire when we have speed advantage
 
-      fire = aligned && goodRange && (speedAdvantage || dist < 200); // Always fire when close
+      fire = aligned && (goodRange || dist < 300) && (speedAdvantage || dist < 250); // Aggressive ships always try to fire when reasonably close
     } else {
       // Roaming: wander to random targets inside safe bounds, avoid edges
       this.wanderTimer -= dt;
@@ -261,8 +308,8 @@ export class AIShip extends Ship {
       turnLeft = diffWander < -0.08;
       const targetSpeed = 0.5 * this.maxSpeed + 0.5 * this.maxSpeed * Math.random();
       up = this.vel.len() < targetSpeed;
-      // Slow down when too close to edge (for roaming ships)
-      const edgeNearRoaming = minEdgeDist < edgeMargin * 0.6; // 60% of edge margin
+      // Slow down when too close to edge (for roaming ships) - more restrictive to keep in center
+      const edgeNearRoaming = minEdgeDist < edgeMargin * 0.8; // 80% of edge margin (more restrictive)
       if (edgeNearRoaming || onCollisionCourse || minNeighbor < desiredSep * 0.6) { up = false; down = true; }
       fire = false; // roamers do not fire by default
     }

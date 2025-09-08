@@ -290,9 +290,6 @@ function initGame(sprite?: HTMLImageElement) {
     enemies.push(s);
   }
 
-  // Mark two nearest as aggressive initially
-  ensureAggressiveAI();
-
   // Show start screen
   openStartScreen();
 }
@@ -398,9 +395,6 @@ function loop(now: number) {
 
     // Update player position for distance-based audio
     setPlayerPosition(player.pos);
-
-    // Choose aggressive ships first (ensures 2 minimum)
-    ensureAggressiveAI();
 
     // AI ships
     for (const s of enemies) {
@@ -1593,22 +1587,4 @@ function maintainShipsInView() {
   }
 }
 
-function ensureAggressiveAI() {
-  const ai = enemies.filter(s => s instanceof AIShip && !s.isSinking) as AIShip[];
-  // Sort by distance to player
-  ai.sort((a, b) => Vec2.sub(a.pos, player.pos).len() - Vec2.sub(b.pos, player.pos).len());
-  let count = 0;
-  for (let i = 0; i < ai.length; i++) {
-    const s = ai[i];
-    const makeAggressive = i < Constants.AGGRESSIVE_MIN_COUNT; // first N nearest
-    if (s.aggressive !== makeAggressive) {
-      s.aggressive = makeAggressive;
-      // Boost combat stats for aggressive ships
-      if (makeAggressive && !(s instanceof CapitalShip)) {
-        s.combatAggressiveness = 1.3; // Regular aggressive ships get moderate boost
-        s.pursuitPersistence = 1.4; // More persistent than passive ships
-      }
-    }
-    if (makeAggressive) count++;
-  }
-}
+// Removed ensureAggressiveAI() function - ships now only become aggressive when damaged

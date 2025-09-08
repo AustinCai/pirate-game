@@ -68,7 +68,7 @@ export const AI_OFFMAP_SPAWN_DISTANCE = 500;
 export const SPAWN_IN_VIEW_MARGIN_PX = 100;
 export const MIN_ENEMIES_IN_VIEW = 2;
 export const MAX_ENEMIES_TOTAL = 16;
-export const AGGRESSIVE_MIN_COUNT = 2;
+// Removed AGGRESSIVE_MIN_COUNT - ships now only become aggressive when damaged
 
 // Collision + physics tuning
 export const WORLD_BOUNDARY_BOUNCE = 0.4;
@@ -109,7 +109,7 @@ export const AI_DEFAULT_DESIRED_DISTANCE = 320;
 export const AI_COLLISION_LOOKAHEAD_S = 2.5;
 export const AI_DESIRED_SEPARATION_MULT = 1.6; // separation ~ 1.6x ship length
 export const AI_EDGE_AVOID_MARGIN_PX = 1200; // Increased from 800 - stronger edge avoidance
-export const AI_WANDER_SAFE_PAD_PX = 1000; // Increased from 600 - safer wandering bounds
+export const AI_WANDER_SAFE_PAD_PX = 2000; // Increased from 1000 - much safer wandering bounds to prefer center
 export const AI_WANDER_REACH_RADIUS_PX = 150;
 export const AI_WANDER_TIME_MIN_S = 6;
 export const AI_WANDER_TIME_MAX_S = 12;
