@@ -251,6 +251,8 @@ function initGame(sprite?: HTMLImageElement) {
   setupCannonHud(player);
   setupMetricsHud();
   setupScoreHud();
+  setupShopNotification();
+  setupTorpedoNotification();
 
   // Spawn AI ships: some in view, some scattered around the world
   const totalShips = Constants.AI_TOTAL_STARTING_SHIPS;
@@ -427,6 +429,8 @@ function loop(now: number) {
     updateCannonHud(player);
     updateMetricsHud(player);
     updateScoreHud();
+    updateShopNotification();
+    updateTorpedoNotification();
 
     // Maintain minimum ships in view
     maintainShipsInView();
@@ -527,6 +531,8 @@ function loop(now: number) {
     updateCannonHud(player);
     updateMetricsHud(player);
     updateScoreHud();
+    updateShopNotification();
+    updateTorpedoNotification();
   }
 
   // Game over screen is triggered immediately when player dies, no respawn logic needed
@@ -575,6 +581,13 @@ function loop(now: number) {
           );
           projectiles.push(new Torpedo(spawn, vel, player));
           (window as any).trackTorpedoShot(); // Track torpedo shot
+
+          // Track first torpedo launch for notification
+          if (!hasLaunchedTorpedo) {
+            hasLaunchedTorpedo = true;
+            updateTorpedoNotification();
+          }
+
           playTorpedoLaunchSound(); // Play launch sound when torpedo actually fires
           tube.cooldown = Constants.TORPEDO_RELOAD_S;
           tube.arming = 0;
@@ -638,6 +651,15 @@ let metricsEl: HTMLDivElement | null = null;
 
 // Score display (top right)
 let scoreEl: HTMLDivElement | null = null;
+
+// Shop notification (bottom left)
+let shopNotificationEl: HTMLDivElement | null = null;
+let shopNotificationDismissed = false;
+
+// Torpedo notification
+let torpedoNotificationEl: HTMLDivElement | null = null;
+let torpedoNotificationDismissed = false;
+let hasLaunchedTorpedo = false;
 
 function setupCannonHud(s: Ship) {
   const hud = document.getElementById('hud')!;
@@ -736,8 +758,7 @@ function updateMetricsHud(s: Ship) {
   const y = Math.round(s.pos.y);
   const speed = Math.round(s.vel.len());
   const xp = Math.floor(playerXP);
-  const shopHint = canAffordAnyUpgrade() ? ' (press S shop)' : '';
-  metricsEl.textContent = `Pos: (${x}, ${y})\nSpeed: ${speed} px/s\nXP: ${xp}${shopHint}`;
+  metricsEl.textContent = `Pos: (${x}, ${y})\nSpeed: ${speed} px/s\nXP: ${xp}`;
 }
 
 // Score display (top right)
@@ -761,9 +782,90 @@ function updateScoreHud() {
   `;
 }
 
+// Shop notification (bottom left)
+function setupShopNotification() {
+  if (!shopNotificationEl) {
+    shopNotificationEl = document.getElementById('shop-notification') as HTMLDivElement;
+
+    // Add click handler to open shop
+    shopNotificationEl.addEventListener('click', (e) => {
+      // Don't trigger if clicking the close button
+      if (!(e.target as HTMLElement).classList.contains('notification-close')) {
+        openUpgradeOverlay();
+        shopNotificationDismissed = true;
+        updateShopNotification();
+      }
+    });
+
+    // Add close button handler
+    const closeButton = shopNotificationEl.querySelector('.notification-close') as HTMLButtonElement;
+    if (closeButton) {
+      closeButton.addEventListener('click', () => {
+        shopNotificationDismissed = true;
+        updateShopNotification();
+      });
+    }
+  }
+}
+
+function updateShopNotification() {
+  if (!shopNotificationEl) return;
+
+  // Hide permanently if dismissed or shop has been opened
+  if (shopNotificationDismissed) {
+    shopNotificationEl.style.display = 'none';
+    return;
+  }
+
+  const canAfford = canAffordAnyUpgrade();
+  shopNotificationEl.style.display = canAfford ? 'block' : 'none';
+}
+
+// Torpedo notification
+function setupTorpedoNotification() {
+  if (!torpedoNotificationEl) {
+    torpedoNotificationEl = document.getElementById('torpedo-notification') as HTMLDivElement;
+
+    // Add click handler to dismiss
+    torpedoNotificationEl.addEventListener('click', (e) => {
+      if (!(e.target as HTMLElement).classList.contains('notification-close')) {
+        torpedoNotificationDismissed = true;
+        updateTorpedoNotification();
+      }
+    });
+
+    // Add close button handler
+    const closeButton = torpedoNotificationEl.querySelector('.notification-close') as HTMLButtonElement;
+    if (closeButton) {
+      closeButton.addEventListener('click', () => {
+        torpedoNotificationDismissed = true;
+        updateTorpedoNotification();
+      });
+    }
+  }
+}
+
+function updateTorpedoNotification() {
+  if (!torpedoNotificationEl) return;
+
+  // Hide permanently if dismissed or torpedo has been launched
+  if (torpedoNotificationDismissed || hasLaunchedTorpedo) {
+    torpedoNotificationEl.style.display = 'none';
+    return;
+  }
+
+  // Show if player has torpedoes available but hasn't launched any
+  const hasTorpedoes = torpedoTubes.length > 0;
+  torpedoNotificationEl.style.display = hasTorpedoes ? 'block' : 'none';
+}
+
 // Removed respawn label functions - game over screen shows immediately on death
 
 function openUpgradeOverlay() {
+  // Mark shop notification as dismissed since shop is now opened
+  shopNotificationDismissed = true;
+  updateShopNotification();
+
   if (!upgradeOverlayEl) {
     const hud = document.getElementById('hud')!;
     upgradeOverlayEl = document.createElement('div');
@@ -1156,6 +1258,13 @@ function restartGame() {
   costReinforceXP = Constants.XP_UPGRADE_BASE_COST;
   costCannonsXP = Constants.XP_UPGRADE_BASE_COST;
   costTorpedoXP = Constants.XP_TORPEDO_COST;
+
+  // Reset shop notification dismissal state
+  shopNotificationDismissed = false;
+
+  // Reset torpedo notification dismissal state
+  torpedoNotificationDismissed = false;
+  hasLaunchedTorpedo = false;
 
   // Reset torpedo tubes
   torpedoTubes.length = 0;
