@@ -23,15 +23,11 @@ export class CapitalShip extends AIShip {
         this.turnAccel = Constants.CAPITAL_TURN_ACCEL;
         this.rudderRate = Constants.CAPITAL_RUDDER_RATE;
 
-        // Enhanced aggressive AI settings for capital ships
+        // Enhanced AI settings for capital ships
         this.fireRange = Constants.CAPITAL_FIRE_RANGE;
         this.desiredDistance = Constants.CAPITAL_DESIRED_DISTANCE * 0.8; // Even closer engagement
-        this.aggressive = true; // Capital ships are always aggressive
 
         // Capital ships have stronger edge avoidance (they're slower and more valuable)
         this.edgeAvoidStrength = 1.5;
-
-        // Capital ships never become passive - they stay aggressive forever
-        this.passiveTimeout = -1; // Negative value means never timeout
     }
 }

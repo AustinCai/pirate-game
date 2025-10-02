@@ -312,7 +312,7 @@ function initGame(sprite?: HTMLImageElement) {
   setupShopNotification();
   setupTorpedoNotification();
 
-  // Spawn AI ships with exactly 2 capital ships for initial spawn
+  // Spawn AI ships with exactly 2 capital ships for initial spawn (all at edges)
   const totalShips = Constants.AI_TOTAL_STARTING_SHIPS;
 
   // Create ships ensuring exactly 2 capital ships
@@ -332,16 +332,38 @@ function initGame(sprite?: HTMLImageElement) {
       s.angDrag = Constants.AI_ANGULAR_DRAG;
     }
 
-    // Find a valid spawn position with collision avoidance
+    // Find a valid edge spawn position with collision avoidance
     const minShipDistance = 200;
     const minPlayerDistance = 400;
 
     for (let attempts = 0; attempts < 50; attempts++) {
-      const margin = 300;
-      const x = WORLD.minX + margin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * margin);
-      const y = WORLD.minY + margin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * margin);
+      // Choose random edge to spawn from (0=top, 1=right, 2=bottom, 3=left)
+      const edge = Math.floor(Math.random() * 4);
+      let spawnX: number, spawnY: number;
+      const edgeMargin = 2000; // At least 2000 units from the edge
+      const worldMargin = 300; // Safety margin from world bounds
 
-      const testPos = new Vec2(x, y);
+      switch (edge) {
+        case 0: // Top edge
+          spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
+          spawnY = WORLD.minY + edgeMargin;
+          break;
+        case 1: // Right edge
+          spawnX = WORLD.maxX - edgeMargin;
+          spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
+          break;
+        case 2: // Bottom edge
+          spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
+          spawnY = WORLD.maxY - edgeMargin;
+          break;
+        case 3: // Left edge
+        default:
+          spawnX = WORLD.minX + edgeMargin;
+          spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
+          break;
+      }
+
+      const testPos = new Vec2(spawnX, spawnY);
 
       // Check if position is valid (not too close to existing ships or player)
       let valid = true;
@@ -355,8 +377,24 @@ function initGame(sprite?: HTMLImageElement) {
         continue;
       }
 
-      s.pos.set(x, y);
-      s.angle = Math.random() * Math.PI * 2;
+      s.pos.set(spawnX, spawnY);
+
+      // Choose a random destination point that's also at least 2000 units from all edges
+      const destMargin = 2000;
+      const destX = WORLD.minX + destMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * destMargin);
+      const destY = WORLD.minY + destMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * destMargin);
+
+      // Set up travel mode towards the destination
+      if (s instanceof AIShip) {
+        s.setTravelTarget(new Vec2(destX, destY));
+      }
+
+      // Give initial velocity towards the destination
+      const toDest = new Vec2(destX - spawnX, destY - spawnY);
+      const initialSpeed = 50 + Math.random() * 50; // 50-100 units/sec
+      const dir = toDest.clone().normalize();
+      s.vel.set(dir.x * initialSpeed, dir.y * initialSpeed);
+
       ships.push(s);
       enemies.push(s);
       break;
