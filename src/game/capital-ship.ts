@@ -31,10 +31,6 @@ export class CapitalShip extends AIShip {
         // Capital ships have stronger edge avoidance (they're slower and more valuable)
         this.edgeAvoidStrength = 1.5;
 
-        // Capital ships are elite hunters with improved combat stats
-        this.combatAggressiveness = 1.5; // Multiplier for combat behavior
-        this.pursuitPersistence = 2.0; // Much more persistent in pursuit
-
         // Capital ships never become passive - they stay aggressive forever
         this.passiveTimeout = -1; // Negative value means never timeout
     }
