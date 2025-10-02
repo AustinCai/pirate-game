@@ -5,6 +5,7 @@ import { Input } from './core/input';
 import { Vec2 } from './core/vector';
 import { AIShip } from './game/ai-ship';
 import { CapitalShip } from './game/capital-ship';
+import { Island, generateIslands } from './game/island';
 import { Projectile } from './game/projectile';
 import { Ship } from './game/ship';
 import { Torpedo } from './game/torpedo';
@@ -43,6 +44,7 @@ let player!: Ship;
 const enemies: Ship[] = [];
 const ships: Ship[] = [];
 const projectiles: Projectile[] = [];
+const islands: Island[] = [];
 const camera = new Vec2(0, 0);
 let shipSpriteRef: HTMLImageElement | undefined;
 // Removed respawn timer and label - game over screen shows immediately on death
@@ -68,6 +70,7 @@ let healJobs: { remaining: number; perSec: number }[] = [];
 // Torpedo state
 type TorpedoTube = { cooldown: number; arming: number };
 let torpedoTubes: TorpedoTube[] = [];
+const islandOutlines: Vec2[][] = [];
 
 // Game statistics tracking
 let gameStats = {
@@ -93,6 +96,98 @@ let gameStats = {
     gameStats.shipsSunk.regular++;
   }
 };
+
+function regenerateIslands() {
+  islands.length = 0;
+  islandOutlines.length = 0;
+  const generated = generateIslands({ countSmall: 4, countLarge: 2 }, WORLD);
+  for (const island of generated) {
+    islands.push(island);
+    islandOutlines.push(island.computeOutline());
+  }
+}
+
+function isWaterPosition(pos: Vec2, radius = 0): boolean {
+  for (const island of islands) {
+    if (island.intersectsCircle(pos, radius)) return false;
+  }
+  return true;
+}
+
+function findOpenWaterPosition(preferred: Vec2, radius: number): Vec2 {
+  if (isWaterPosition(preferred, radius)) return preferred.clone();
+  const attempt = new Vec2();
+  for (let i = 0; i < 100; i++) {
+    const margin = 400 + radius;
+    const x = WORLD.minX + margin + Math.random() * (WORLD.maxX - WORLD.minX - margin * 2);
+    const y = WORLD.minY + margin + Math.random() * (WORLD.maxY - WORLD.minY - margin * 2);
+    attempt.set(x, y);
+    if (isWaterPosition(attempt, radius)) {
+      return attempt.clone();
+    }
+  }
+  return preferred.clone();
+}
+
+function ensureWaterPosition(preferred: Vec2, radius: number): Vec2 {
+  if (isWaterPosition(preferred, radius)) return preferred.clone();
+  const attempt = new Vec2();
+  const maxSearchRadius = Math.max(800, radius * 4);
+  const step = Math.max(120, radius * 0.8);
+  for (let r = step; r <= maxSearchRadius; r += step) {
+    const samples = Math.max(8, Math.round((r / step) * 12));
+    for (let i = 0; i < samples; i++) {
+      const angle = (i / samples) * Math.PI * 2;
+      attempt.set(
+        preferred.x + Math.cos(angle) * r,
+        preferred.y + Math.sin(angle) * r,
+      );
+      if (!withinWorldBounds(attempt, radius)) continue;
+      if (isWaterPosition(attempt, radius)) {
+        return attempt.clone();
+      }
+    }
+  }
+  return findOpenWaterPosition(preferred, radius);
+}
+
+function withinWorldBounds(pos: Vec2, radius: number): boolean {
+  return pos.x - radius >= WORLD.minX &&
+    pos.x + radius <= WORLD.maxX &&
+    pos.y - radius >= WORLD.minY &&
+    pos.y + radius <= WORLD.maxY;
+}
+
+function resolveIslandCollision(ship: Ship) {
+  const collisionRadius = ship.getCollisionRadius();
+  const maxIterations = 3;
+  for (let iter = 0; iter < maxIterations; iter++) {
+    let adjusted = false;
+    for (const island of islands) {
+      const push = island.resolveCircle(ship.pos, collisionRadius);
+      const pushLen = push.len();
+      if (pushLen > 1e-3) {
+        ship.pos.add(push);
+        const normal = push.clone().normalize();
+        const inward = ship.vel.dot(normal);
+        if (inward < 0) {
+          ship.vel.add(Vec2.scale(normal, -inward));
+        }
+        adjusted = true;
+      }
+    }
+    if (!adjusted) break;
+  }
+}
+
+function projectileHitsIsland(prev: Vec2, current: Vec2, radius: number): boolean {
+  for (const island of islands) {
+    if (island.intersectsSegment(prev, current, radius)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // World bounds (finite map) - now defined above
 
@@ -156,57 +251,6 @@ function isPositionValid(pos: Vec2, existingShips: Ship[], minDistance: number):
   return true;
 }
 
-// Simplified random spawning with collision avoidance
-function spawnAIShipRandom(player: Ship, existingShips: Ship[], sprite?: HTMLImageElement, capitalChance: number = 0.15): AIShip {
-  const s = createAIShip(player, sprite, capitalChance);
-
-  // Only apply regular AI stats if it's not a capital ship
-  if (!(s instanceof CapitalShip)) {
-    s.maxHealth = Constants.AI_MAX_HEALTH;
-    s.health = s.maxHealth;
-    s.maxSpeed = Constants.AI_MAX_SPEED;
-    s.thrust = Constants.AI_THRUST;
-    s.reverseThrust = Constants.AI_REVERSE_THRUST;
-    s.turnAccel = Constants.AI_TURN_ACCEL;
-    s.rudderRate = Constants.AI_RUDDER_RATE;
-    s.linDrag = Constants.AI_LINEAR_DRAG;
-    s.angDrag = Constants.AI_ANGULAR_DRAG;
-  }
-
-  // Minimum distance between ships and from player
-  const minShipDistance = 200; // Minimum distance between any two ships
-  const minPlayerDistance = 400; // Minimum distance from player
-
-  // Try up to 50 times to find a valid position
-  for (let attempts = 0; attempts < 50; attempts++) {
-    // Random position within world bounds, with some margin from edges
-    const margin = 300;
-    const x = WORLD.minX + margin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * margin);
-    const y = WORLD.minY + margin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * margin);
-
-    const testPos = new Vec2(x, y);
-
-    // Check if position is valid (not too close to existing ships or player)
-    if (isPositionValid(testPos, existingShips, minShipDistance) &&
-      isPositionValid(testPos, [player], minPlayerDistance)) {
-
-      s.pos.set(x, y);
-
-      // Random initial facing direction
-      s.angle = Math.random() * Math.PI * 2;
-
-      return s;
-    }
-  }
-
-  // Fallback: if we can't find a valid position, just place it somewhere
-  const fallbackX = WORLD.minX + 100 + Math.random() * (WORLD.maxX - WORLD.minX - 200);
-  const fallbackY = WORLD.minY + 100 + Math.random() * (WORLD.maxY - WORLD.minY - 200);
-  s.pos.set(fallbackX, fallbackY);
-  s.angle = Math.random() * Math.PI * 2;
-
-  return s;
-}
 
 // New edge spawning function for ships that spawn when others are killed
 function spawnShipAtEdge(player: Ship, existingShips: Ship[], sprite?: HTMLImageElement): AIShip {
@@ -225,38 +269,58 @@ function spawnShipAtEdge(player: Ship, existingShips: Ship[], sprite?: HTMLImage
     s.angDrag = Constants.AI_ANGULAR_DRAG;
   }
 
-  // Choose random edge to spawn from (0=top, 1=right, 2=bottom, 3=left)
-  const edge = Math.floor(Math.random() * 4);
-  let spawnX: number, spawnY: number;
+  let spawnX = player.pos.x;
+  let spawnY = player.pos.y;
   const edgeMargin = 2000; // At least 2000 units from the edge
   const worldMargin = 300; // Safety margin from world bounds
-
-  switch (edge) {
-    case 0: // Top edge
-      spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
-      spawnY = WORLD.minY + edgeMargin;
-      break;
-    case 1: // Right edge
-      spawnX = WORLD.maxX - edgeMargin;
-      spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
-      break;
-    case 2: // Bottom edge
-      spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
-      spawnY = WORLD.maxY - edgeMargin;
-      break;
-    case 3: // Left edge
-    default:
-      spawnX = WORLD.minX + edgeMargin;
-      spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
-      break;
+  const spawnAttempts = 40;
+  for (let attempt = 0; attempt < spawnAttempts; attempt++) {
+    const edge = Math.floor(Math.random() * 4);
+    let candidateX: number;
+    let candidateY: number;
+    switch (edge) {
+      case 0: // Top edge
+        candidateX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
+        candidateY = WORLD.minY + edgeMargin;
+        break;
+      case 1: // Right edge
+        candidateX = WORLD.maxX - edgeMargin;
+        candidateY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
+        break;
+      case 2: // Bottom edge
+        candidateX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
+        candidateY = WORLD.maxY - edgeMargin;
+        break;
+      case 3: // Left edge
+      default:
+        candidateX = WORLD.minX + edgeMargin;
+        candidateY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
+        break;
+    }
+    const candidate = new Vec2(candidateX, candidateY);
+    if (!isWaterPosition(candidate, s.getCollisionRadius())) continue;
+    spawnX = candidateX;
+    spawnY = candidateY;
+    break;
   }
 
-  s.pos.set(spawnX, spawnY);
+  const edgeSafe = ensureWaterPosition(new Vec2(spawnX, spawnY), s.getCollisionRadius());
+  s.pos.set(edgeSafe.x, edgeSafe.y);
 
   // Choose a random destination point that's also at least 2000 units from all edges
   const destMargin = 2000;
-  const destX = WORLD.minX + destMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * destMargin);
-  const destY = WORLD.minY + destMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * destMargin);
+  let destX = player.pos.x;
+  let destY = player.pos.y;
+  for (let attempt = 0; attempt < spawnAttempts; attempt++) {
+    const candidateX = WORLD.minX + destMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * destMargin);
+    const candidateY = WORLD.minY + destMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * destMargin);
+    const candidate = new Vec2(candidateX, candidateY);
+    if (!isWaterPosition(candidate, s.getCollisionRadius())) continue;
+    const destSafe = ensureWaterPosition(candidate, s.getCollisionRadius());
+    destX = destSafe.x;
+    destY = destSafe.y;
+    break;
+  }
 
   // Set up travel mode towards the destination
   if (s instanceof AIShip) {
@@ -287,6 +351,8 @@ function getViewportBounds(camera: Vec2, canvasWidth: number, canvasHeight: numb
 function initGame(sprite?: HTMLImageElement) {
   shipSpriteRef = sprite;
 
+  regenerateIslands();
+
   // Clear all existing ships to ensure clean state
   ships.length = 0;
   player = new Ship({
@@ -305,6 +371,8 @@ function initGame(sprite?: HTMLImageElement) {
   player.rudderRate = Constants.PLAYER_RUDDER_RATE;
   player.linDrag = Constants.PLAYER_LINEAR_DRAG;
   player.angDrag = Constants.PLAYER_ANGULAR_DRAG;
+  const playerSpawn = ensureWaterPosition(new Vec2(0, 0), player.getCollisionRadius());
+  player.pos.set(playerSpawn.x, playerSpawn.y);
   ships.push(player);
   setupCannonHud(player);
   setupMetricsHud();
@@ -312,13 +380,14 @@ function initGame(sprite?: HTMLImageElement) {
   setupShopNotification();
   setupTorpedoNotification();
 
-  // Spawn AI ships with exactly 2 capital ships for initial spawn (all at edges)
-  const totalShips = Constants.AI_TOTAL_STARTING_SHIPS;
+  // Spawn 16 AI ships (including 2 capital ships) at random locations
+  const targetShips = Constants.AI_TOTAL_STARTING_SHIPS; // 16 total ships
+  const targetCapitalShips = 2;
 
-  // Create ships ensuring exactly 2 capital ships
-  const initialShips = createInitialShips(player, totalShips, sprite);
+  // Create ships ensuring we attempt to spawn exactly 2 capital ships
+  const shipsToSpawn = createInitialShips(player, targetShips, sprite);
 
-  for (const s of initialShips) {
+  for (const s of shipsToSpawn) {
     // Apply stats for regular AI ships (capital ships use their own stats)
     if (!(s instanceof CapitalShip)) {
       s.maxHealth = Constants.AI_MAX_HEALTH;
@@ -332,57 +401,43 @@ function initGame(sprite?: HTMLImageElement) {
       s.angDrag = Constants.AI_ANGULAR_DRAG;
     }
 
-    // Find a valid edge spawn position with collision avoidance
+    // Random position within world bounds with margins
+    const margin = 500;
+    const x = WORLD.minX + margin + Math.random() * (WORLD.maxX - WORLD.minX - margin * 2);
+    const y = WORLD.minY + margin + Math.random() * (WORLD.maxY - WORLD.minY - margin * 2);
+    s.pos.set(x, y);
+
+    // Check for overlaps with islands or other ships
+    const shipRadius = s.getCollisionRadius();
+    const playerRadius = player.getCollisionRadius();
     const minShipDistance = 200;
-    const minPlayerDistance = 400;
 
-    for (let attempts = 0; attempts < 50; attempts++) {
-      // Choose random edge to spawn from (0=top, 1=right, 2=bottom, 3=left)
-      const edge = Math.floor(Math.random() * 4);
-      let spawnX: number, spawnY: number;
-      const edgeMargin = 2000; // At least 2000 units from the edge
-      const worldMargin = 300; // Safety margin from world bounds
+    let isValidPosition = true;
 
-      switch (edge) {
-        case 0: // Top edge
-          spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
-          spawnY = WORLD.minY + edgeMargin;
-          break;
-        case 1: // Right edge
-          spawnX = WORLD.maxX - edgeMargin;
-          spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
-          break;
-        case 2: // Bottom edge
-          spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
-          spawnY = WORLD.maxY - edgeMargin;
-          break;
-        case 3: // Left edge
-        default:
-          spawnX = WORLD.minX + edgeMargin;
-          spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
-          break;
+    // Check island collision
+    if (!isWaterPosition(s.pos, shipRadius)) {
+      isValidPosition = false;
+    }
+
+    // Check player collision (400 unit minimum distance)
+    if (Vec2.sub(s.pos, player.pos).len() < playerRadius + shipRadius + 400) {
+      isValidPosition = false;
+    }
+
+    // Check other ships collision
+    for (const existingShip of ships) {
+      if (Vec2.sub(s.pos, existingShip.pos).len() < existingShip.getCollisionRadius() + shipRadius + minShipDistance) {
+        isValidPosition = false;
+        break;
       }
+    }
 
-      const testPos = new Vec2(spawnX, spawnY);
-
-      // Check if position is valid (not too close to existing ships or player)
-      let valid = true;
-      for (const existingShip of ships) {
-        if (Vec2.sub(testPos, existingShip.pos).len() < minShipDistance) {
-          valid = false;
-          break;
-        }
-      }
-      if (!valid || Vec2.sub(testPos, player.pos).len() < minPlayerDistance) {
-        continue;
-      }
-
-      s.pos.set(spawnX, spawnY);
-
-      // Choose a random destination point that's also at least 2000 units from all edges
-      const destMargin = 2000;
-      const destX = WORLD.minX + destMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * destMargin);
-      const destY = WORLD.minY + destMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * destMargin);
+    // Only add ship if position is valid
+    if (isValidPosition) {
+      // Set random travel destination
+      const destMargin = 1000;
+      const destX = WORLD.minX + destMargin + Math.random() * (WORLD.maxX - WORLD.minX - destMargin * 2);
+      const destY = WORLD.minY + destMargin + Math.random() * (WORLD.maxY - WORLD.minY - destMargin * 2);
 
       // Set up travel mode towards the destination
       if (s instanceof AIShip) {
@@ -390,14 +445,13 @@ function initGame(sprite?: HTMLImageElement) {
       }
 
       // Give initial velocity towards the destination
-      const toDest = new Vec2(destX - spawnX, destY - spawnY);
+      const toDest = new Vec2(destX - x, destY - y);
       const initialSpeed = 50 + Math.random() * 50; // 50-100 units/sec
       const dir = toDest.clone().normalize();
       s.vel.set(dir.x * initialSpeed, dir.y * initialSpeed);
 
       ships.push(s);
       enemies.push(s);
-      break;
     }
   }
 
@@ -476,6 +530,35 @@ function drawOcean(w: number, h: number, cam: Vec2, t: number) {
   ctx.restore();
 }
 
+function drawIslands(w: number, h: number) {
+  if (!islands.length) return;
+
+  ctx.save();
+  ctx.fillStyle = '#3a5a2d';
+  ctx.strokeStyle = '#1d2b11';
+  ctx.lineWidth = 4;
+  ctx.lineJoin = 'round';
+  for (let i = 0; i < islands.length; i++) {
+    const outline = islandOutlines[i] ?? islands[i].computeOutline();
+    if (!outline.length) continue;
+    if (!islandOutlines[i]) {
+      islandOutlines[i] = outline;
+    }
+    ctx.beginPath();
+    for (let j = 0; j < outline.length; j++) {
+      const pt = outline[j];
+      const sx = pt.x - camera.x + w / 2;
+      const sy = pt.y - camera.y + h / 2;
+      if (j === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 let last = performance.now();
 let speedupMode = false;
 function loop(now: number) {
@@ -509,6 +592,7 @@ function loop(now: number) {
       fire: input.isDown('Space'),
     }, projectiles);
     applyWorldBounds(player);
+    resolveIslandCollision(player);
 
     // Update player position for distance-based audio
     setPlayerPosition(player.pos);
@@ -516,9 +600,10 @@ function loop(now: number) {
     // AI ships
     for (const s of enemies) {
       if (s instanceof AIShip) {
-        s.updateAI(dt, projectiles, ships, WORLD);
+        s.updateAI(dt, projectiles, ships, WORLD, islands);
       }
       applyWorldBounds(s);
+      resolveIslandCollision(s);
     }
 
     // Ship-ship collisions (gentle bounce)
@@ -544,7 +629,12 @@ function loop(now: number) {
     // Projectiles
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
+      const prev = p.pos.clone();
       p.update(dt);
+      if (projectileHitsIsland(prev, p.pos, p.radius)) {
+        projectiles.splice(i, 1);
+        continue;
+      }
       if (!p.alive) projectiles.splice(i, 1);
     }
 
@@ -682,6 +772,7 @@ function loop(now: number) {
   const w = canvas.width / DPR;
   const h = canvas.height / DPR;
   drawOcean(w, h, camera, now / 1000);
+  drawIslands(w, h);
   drawWorldBounds(w, h);
 
   // projectiles first (behind ships)
@@ -1503,7 +1594,8 @@ function respawnPlayer() {
   newPlayer.isPlayer = true;
   newPlayer.maxHealth = Constants.PLAYER_MAX_HEALTH;
   newPlayer.health = newPlayer.maxHealth;
-  newPlayer.pos.set(0, 0);
+  const respawnPos = ensureWaterPosition(new Vec2(0, 0), newPlayer.getCollisionRadius());
+  newPlayer.pos.set(respawnPos.x, respawnPos.y);
   newPlayer.vel.set(0, 0);
   newPlayer.angle = -Math.PI / 2;
   ships.push(newPlayer);
@@ -1546,6 +1638,29 @@ function drawMinimap(w: number, h: number) {
   // world frame inside panel
   ctx.strokeStyle = 'rgba(255,255,255,0.25)';
   ctx.strokeRect(x + pad + xOffset, y + pad + yOffset, worldW * scale, worldH * scale);
+
+  // islands
+  if (islands.length) {
+    ctx.fillStyle = '#3a5a2d';
+    ctx.strokeStyle = '#1d2b11';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < islands.length; i++) {
+      const outline = islandOutlines[i] ?? islands[i].computeOutline();
+      if (!outline.length) continue;
+      if (!islandOutlines[i]) islandOutlines[i] = outline;
+      ctx.beginPath();
+      for (let j = 0; j < outline.length; j++) {
+        const pt = outline[j];
+        const mx = x + pad + xOffset + (pt.x - WORLD.minX) * scale;
+        const my = y + pad + yOffset + (pt.y - WORLD.minY) * scale;
+        if (j === 0) ctx.moveTo(mx, my);
+        else ctx.lineTo(mx, my);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
 
   // ship pips
   for (const s of ships) {
@@ -1705,6 +1820,7 @@ function resolveShipCollisions(all: Ship[], dt: number) {
           a.pos.x -= nx * corrA * 0.5; a.pos.y -= ny * corrA * 0.5;
           b.pos.x += nx * corrB * 0.5; b.pos.y += ny * corrB * 0.5;
           applyWorldBounds(a); applyWorldBounds(b);
+          resolveIslandCollision(a); resolveIslandCollision(b);
 
           // Relative velocity along normal
           const rvx = b.vel.x - a.vel.x;

@@ -2,6 +2,7 @@ import * as Constants from '../core/constants';
 import { Vec2 } from '../core/vector';
 import { Projectile } from './projectile';
 import { Ship, type ShipOptions } from './ship';
+import { Island } from './island';
 
 export interface AIOptions {
   preferredSide?: 'port' | 'starboard';
@@ -140,7 +141,7 @@ export class AIShip extends Ship {
     return Math.atan2(toWander.y, toWander.x);
   }
 
-  private computeAvoidanceVector(neighbors: Ship[], world: WorldBounds): Vec2 {
+  private computeAvoidanceVector(neighbors: Ship[], world: WorldBounds, islands: Island[] | undefined): Vec2 {
     const result = new Vec2(0, 0);
     const desiredSeparation = Math.max(140, this.length * Constants.AI_DESIRED_SEPARATION_MULT);
 
@@ -175,6 +176,15 @@ export class AIShip extends Ship {
       result.y -= (1 - bottomDist / margin) * this.edgeAvoidStrength;
     }
 
+    if (islands?.length) {
+      for (const island of islands) {
+        const push = island.avoidanceVector(this.pos, this.getCollisionRadius());
+        if (push.len() > 0) {
+          result.add(push);
+        }
+      }
+    }
+
     return result;
   }
 
@@ -197,7 +207,7 @@ export class AIShip extends Ship {
    * - COLLISION AVOIDANCE: Stronger influence (0.6 blend factor) for safer navigation
    * - NO FIRING: Passive ships never attack
    */
-  updateAI(dt: number, projectiles: Projectile[], neighbors: Ship[], world: WorldBounds) {
+  updateAI(dt: number, projectiles: Projectile[], neighbors: Ship[], world: WorldBounds, islands?: Island[]) {
     this.updateAggressionState();
     this.checkTravelMode();
 
@@ -214,14 +224,14 @@ export class AIShip extends Ship {
       const toTravelTarget = Vec2.sub(this.travelTarget, this.pos);
       desiredAngle = Math.atan2(toTravelTarget.y, toTravelTarget.x);
 
-      const avoidance = this.computeAvoidanceVector(neighbors, world);
+      const avoidance = this.computeAvoidanceVector(neighbors, world, islands);
       const avoidAngle = avoidance.len() > 1e-3 ? Math.atan2(avoidance.y, avoidance.x) : null;
       if (avoidAngle !== null) {
         desiredAngle = blendAngles(desiredAngle, avoidAngle, 0.6);
       }
     } else {
     // Normal AI behavior (aggressive or wander)
-      const avoidance = this.computeAvoidanceVector(neighbors, world);
+      const avoidance = this.computeAvoidanceVector(neighbors, world, islands);
       const avoidAngle = avoidance.len() > 1e-3 ? Math.atan2(avoidance.y, avoidance.x) : null;
 
       if (this.aggressive) {
