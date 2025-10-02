@@ -34,6 +34,10 @@ export class AIShip extends Ship {
   private lastDamageTime = 0; // Time when last damage was taken
   protected passiveTimeout = 10.0; // Seconds without damage before becoming passive
 
+  // Travel mode properties
+  private travelMode = false;
+  private travelTarget: Vec2 | null = null;
+
   constructor(target: Ship, opts: { ship?: ShipOptions; ai?: AIOptions; sprite?: HTMLImageElement } = {}) {
     super(opts.ship ?? {}, opts.sprite);
     this.target = target;
@@ -48,6 +52,33 @@ export class AIShip extends Ship {
     if (dmg > 0) {
       this.aggressive = true;
       this.lastDamageTime = Date.now() / 1000; // Current time in seconds
+      // Exit travel mode when taking damage
+      if (this.travelMode) {
+        this.travelMode = false;
+        this.travelTarget = null;
+      }
+    }
+  }
+
+  // Set up travel mode with a target destination
+  setTravelTarget(target: Vec2) {
+    this.travelMode = true;
+    this.travelTarget = target.clone();
+    this.aggressive = false; // Start non-aggressive in travel mode
+  }
+
+  // Check if ship has reached travel target
+  private hasReachedTravelTarget(): boolean {
+    if (!this.travelTarget || !this.travelMode) return false;
+    const distance = Vec2.sub(this.travelTarget, this.pos).len();
+    return distance < 100; // Within 100 units of target
+  }
+
+  // Exit travel mode if target reached
+  private checkTravelMode() {
+    if (this.travelMode && this.hasReachedTravelTarget()) {
+      this.travelMode = false;
+      this.travelTarget = null;
     }
   }
 
@@ -168,26 +199,42 @@ export class AIShip extends Ship {
    */
   updateAI(dt: number, projectiles: Projectile[], neighbors: Ship[], world: WorldBounds) {
     this.updateAggressionState();
+    this.checkTravelMode();
 
+    // Always calculate target info for aggressive behavior
     const toTarget = Vec2.sub(this.target.pos, this.pos);
     const distToTarget = toTarget.len();
     const targetAngle = Math.atan2(toTarget.y, toTarget.x);
     const preferredBroadside = this.getPreferredBroadsideAngle(targetAngle);
 
-    const avoidance = this.computeAvoidanceVector(neighbors, world);
-    const avoidAngle = avoidance.len() > 1e-3 ? Math.atan2(avoidance.y, avoidance.x) : null;
-
     let desiredAngle = this.angle;
-    if (this.aggressive) {
-      const withinCombatRange = distToTarget <= 800;
-      desiredAngle = withinCombatRange ? preferredBroadside : targetAngle;
-      if (avoidAngle !== null) {
-        desiredAngle = blendAngles(desiredAngle, avoidAngle, 0.35);
-      }
-    } else {
-      desiredAngle = this.updateWanderTarget(dt, world);
+
+    if (this.travelMode && this.travelTarget) {
+      // Travel mode: move straight towards travel target
+      const toTravelTarget = Vec2.sub(this.travelTarget, this.pos);
+      desiredAngle = Math.atan2(toTravelTarget.y, toTravelTarget.x);
+
+      const avoidance = this.computeAvoidanceVector(neighbors, world);
+      const avoidAngle = avoidance.len() > 1e-3 ? Math.atan2(avoidance.y, avoidance.x) : null;
       if (avoidAngle !== null) {
         desiredAngle = blendAngles(desiredAngle, avoidAngle, 0.6);
+      }
+    } else {
+    // Normal AI behavior (aggressive or wander)
+      const avoidance = this.computeAvoidanceVector(neighbors, world);
+      const avoidAngle = avoidance.len() > 1e-3 ? Math.atan2(avoidance.y, avoidance.x) : null;
+
+      if (this.aggressive) {
+        const withinCombatRange = distToTarget <= 800;
+        desiredAngle = withinCombatRange ? preferredBroadside : targetAngle;
+        if (avoidAngle !== null) {
+          desiredAngle = blendAngles(desiredAngle, avoidAngle, 0.35);
+        }
+      } else {
+        desiredAngle = this.updateWanderTarget(dt, world);
+        if (avoidAngle !== null) {
+          desiredAngle = blendAngles(desiredAngle, avoidAngle, 0.6);
+        }
       }
     }
 
@@ -199,7 +246,11 @@ export class AIShip extends Ship {
     const forward = this.forwardVec();
     const forwardSpeed = this.vel.dot(forward);
     let desiredForwardSpeed = this.maxSpeed * 0.4;
-    if (this.aggressive) {
+
+    if (this.travelMode) {
+      // Travel mode: consistent speed towards destination
+      desiredForwardSpeed = this.maxSpeed * 0.7;
+    } else if (this.aggressive) {
       const withinCombatRange = distToTarget <= 800;
       if (withinCombatRange) {
         desiredForwardSpeed = this.maxSpeed * 0.55; // Moderate speed for broadside maneuvering

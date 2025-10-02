@@ -61,12 +61,6 @@ export const CAPITAL_DESIRED_DISTANCE = 400;
 
 // Population and spawning
 export const AI_TOTAL_STARTING_SHIPS = 16;
-export const AI_START_IN_VIEW_COUNT = 4;
-export const AI_SPAWN_ANNULUS_MIN_R = 600;
-export const AI_SPAWN_ANNULUS_MAX_R = 2600;
-export const AI_OFFMAP_SPAWN_DISTANCE = 500;
-export const SPAWN_IN_VIEW_MARGIN_PX = 100;
-export const MIN_ENEMIES_IN_VIEW = 2;
 export const MAX_ENEMIES_TOTAL = 16;
 // Removed AGGRESSIVE_MIN_COUNT - ships now only become aggressive when damaged
 

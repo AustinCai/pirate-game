@@ -121,6 +121,133 @@ loadShipSinkingSound().catch(err => console.warn('Ship sinking sound initializat
 // Try to load webp sprite; fallback to hull drawing
 Assets.loadImage('/ship.webp').then(img => initGame(img)).catch(() => initGame());
 
+// Helper function to check if a position is too close to existing ships
+function isPositionValid(pos: Vec2, existingShips: Ship[], minDistance: number): boolean {
+  for (const ship of existingShips) {
+    const distance = Vec2.sub(pos, ship.pos).len();
+    if (distance < minDistance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Simplified random spawning with collision avoidance
+function spawnAIShipRandom(player: Ship, existingShips: Ship[], sprite?: HTMLImageElement): AIShip {
+  const s = createAIShip(player, sprite);
+
+  // Only apply regular AI stats if it's not a capital ship
+  if (!(s instanceof CapitalShip)) {
+    s.maxHealth = Constants.AI_MAX_HEALTH;
+    s.health = s.maxHealth;
+    s.maxSpeed = Constants.AI_MAX_SPEED;
+    s.thrust = Constants.AI_THRUST;
+    s.reverseThrust = Constants.AI_REVERSE_THRUST;
+    s.turnAccel = Constants.AI_TURN_ACCEL;
+    s.rudderRate = Constants.AI_RUDDER_RATE;
+    s.linDrag = Constants.AI_LINEAR_DRAG;
+    s.angDrag = Constants.AI_ANGULAR_DRAG;
+  }
+
+  // Minimum distance between ships and from player
+  const minShipDistance = 200; // Minimum distance between any two ships
+  const minPlayerDistance = 400; // Minimum distance from player
+
+  // Try up to 50 times to find a valid position
+  for (let attempts = 0; attempts < 50; attempts++) {
+    // Random position within world bounds, with some margin from edges
+    const margin = 300;
+    const x = WORLD.minX + margin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * margin);
+    const y = WORLD.minY + margin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * margin);
+
+    const testPos = new Vec2(x, y);
+
+    // Check if position is valid (not too close to existing ships or player)
+    if (isPositionValid(testPos, existingShips, minShipDistance) &&
+      isPositionValid(testPos, [player], minPlayerDistance)) {
+
+      s.pos.set(x, y);
+
+      // Random initial facing direction
+      s.angle = Math.random() * Math.PI * 2;
+
+      return s;
+    }
+  }
+
+  // Fallback: if we can't find a valid position, just place it somewhere
+  const fallbackX = WORLD.minX + 100 + Math.random() * (WORLD.maxX - WORLD.minX - 200);
+  const fallbackY = WORLD.minY + 100 + Math.random() * (WORLD.maxY - WORLD.minY - 200);
+  s.pos.set(fallbackX, fallbackY);
+  s.angle = Math.random() * Math.PI * 2;
+
+  return s;
+}
+
+// New edge spawning function for ships that spawn when others are killed
+function spawnShipAtEdge(player: Ship, existingShips: Ship[], sprite?: HTMLImageElement): AIShip {
+  const s = createAIShip(player, sprite);
+
+  // Only apply regular AI stats if it's not a capital ship
+  if (!(s instanceof CapitalShip)) {
+    s.maxHealth = Constants.AI_MAX_HEALTH;
+    s.health = s.maxHealth;
+    s.maxSpeed = Constants.AI_MAX_SPEED;
+    s.thrust = Constants.AI_THRUST;
+    s.reverseThrust = Constants.AI_REVERSE_THRUST;
+    s.turnAccel = Constants.AI_TURN_ACCEL;
+    s.rudderRate = Constants.AI_RUDDER_RATE;
+    s.linDrag = Constants.AI_LINEAR_DRAG;
+    s.angDrag = Constants.AI_ANGULAR_DRAG;
+  }
+
+  // Choose random edge to spawn from (0=top, 1=right, 2=bottom, 3=left)
+  const edge = Math.floor(Math.random() * 4);
+  let spawnX: number, spawnY: number;
+  const edgeMargin = 2000; // At least 2000 units from the edge
+  const worldMargin = 300; // Safety margin from world bounds
+
+  switch (edge) {
+    case 0: // Top edge
+      spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
+      spawnY = WORLD.minY + edgeMargin;
+      break;
+    case 1: // Right edge
+      spawnX = WORLD.maxX - edgeMargin;
+      spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
+      break;
+    case 2: // Bottom edge
+      spawnX = WORLD.minX + worldMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * worldMargin);
+      spawnY = WORLD.maxY - edgeMargin;
+      break;
+    case 3: // Left edge
+    default:
+      spawnX = WORLD.minX + edgeMargin;
+      spawnY = WORLD.minY + worldMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * worldMargin);
+      break;
+  }
+
+  s.pos.set(spawnX, spawnY);
+
+  // Choose a random destination point that's also at least 2000 units from all edges
+  const destMargin = 2000;
+  const destX = WORLD.minX + destMargin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * destMargin);
+  const destY = WORLD.minY + destMargin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * destMargin);
+
+  // Set up travel mode towards the destination
+  if (s instanceof AIShip) {
+    s.setTravelTarget(new Vec2(destX, destY));
+  }
+
+  // Give initial velocity towards the destination
+  const toDest = new Vec2(destX - spawnX, destY - spawnY);
+  const initialSpeed = 50 + Math.random() * 50; // 50-100 units/sec
+  const dir = toDest.clone().normalize();
+  s.vel.set(dir.x * initialSpeed, dir.y * initialSpeed);
+
+  return s;
+}
+
 function getViewportBounds(camera: Vec2, canvasWidth: number, canvasHeight: number) {
   const w = canvasWidth / DPR;
   const h = canvasHeight / DPR;
@@ -132,99 +259,6 @@ function getViewportBounds(camera: Vec2, canvasWidth: number, canvasHeight: numb
   };
 }
 
-function spawnAIShipInView(player: Ship, sprite?: HTMLImageElement): AIShip {
-  const s = createAIShip(player, sprite);
-  // Only apply regular AI stats if it's not a capital ship
-  if (!(s instanceof CapitalShip)) {
-    s.maxHealth = Constants.AI_MAX_HEALTH;
-    s.health = s.maxHealth;
-    s.maxSpeed = Constants.AI_MAX_SPEED;
-    s.thrust = Constants.AI_THRUST;
-    s.reverseThrust = Constants.AI_REVERSE_THRUST;
-    s.turnAccel = Constants.AI_TURN_ACCEL;
-    s.rudderRate = Constants.AI_RUDDER_RATE;
-    s.linDrag = Constants.AI_LINEAR_DRAG;
-    s.angDrag = Constants.AI_ANGULAR_DRAG;
-    s.turnAccel = Constants.AI_TURN_ACCEL;
-    s.rudderRate = Constants.AI_RUDDER_RATE;
-    s.linDrag = Constants.AI_LINEAR_DRAG;
-    s.angDrag = Constants.AI_ANGULAR_DRAG;
-  }
-
-  // Get current viewport bounds (camera starts at player position)
-  const viewport = getViewportBounds(camera, canvas.width, canvas.height);
-
-  // Spawn within view with some margin to avoid immediate edge clipping
-  const margin = Constants.SPAWN_IN_VIEW_MARGIN_PX;
-  const viewWidth = viewport.right - viewport.left - margin * 2;
-  const viewHeight = viewport.bottom - viewport.top - margin * 2;
-
-  // Random position within viewport
-  const x = viewport.left + margin + Math.random() * viewWidth;
-  const y = viewport.top + margin + Math.random() * viewHeight;
-
-  s.pos.set(x, y);
-
-  // Face toward player initially
-  const toPlayer = Vec2.sub(player.pos, s.pos);
-  s.angle = Math.atan2(toPlayer.y, toPlayer.x) + (Math.random() - 0.5) * 0.6;
-
-  return s;
-}
-
-function spawnAIShipBeyondMap(player: Ship, sprite?: HTMLImageElement): AIShip {
-  const s = createAIShip(player, sprite);
-  // Only apply regular AI stats if it's not a capital ship
-  if (!(s instanceof CapitalShip)) {
-    s.maxHealth = Constants.AI_MAX_HEALTH;
-    s.health = s.maxHealth;
-    s.maxSpeed = Constants.AI_MAX_SPEED;
-    s.thrust = Constants.AI_THRUST;
-    s.reverseThrust = Constants.AI_REVERSE_THRUST;
-  }
-
-  // Spawn beyond map edges and sail toward center
-  const spawnDistance = Constants.AI_OFFMAP_SPAWN_DISTANCE; // Distance beyond map edges to spawn
-  const worldCenterX = 0;
-  const worldCenterY = 0;
-
-  // Choose which edge to spawn from (0=top, 1=right, 2=bottom, 3=left)
-  const edge = Math.floor(Math.random() * 4);
-  let spawnX: number, spawnY: number;
-
-  switch (edge) {
-    case 0: // Top edge
-      spawnX = (Math.random() - 0.5) * (WORLD.maxX - WORLD.minX) * 1.5; // Wider spread
-      spawnY = WORLD.minY - spawnDistance;
-      break;
-    case 1: // Right edge
-      spawnX = WORLD.maxX + spawnDistance;
-      spawnY = (Math.random() - 0.5) * (WORLD.maxY - WORLD.minY) * 1.5;
-      break;
-    case 2: // Bottom edge
-      spawnX = (Math.random() - 0.5) * (WORLD.maxX - WORLD.minX) * 1.5;
-      spawnY = WORLD.maxY + spawnDistance;
-      break;
-    case 3: // Left edge
-    default:
-      spawnX = WORLD.minX - spawnDistance;
-      spawnY = (Math.random() - 0.5) * (WORLD.maxY - WORLD.minY) * 1.5;
-      break;
-  }
-
-  s.pos.set(spawnX, spawnY);
-
-  // Face toward world center initially, with some variation
-  const toCenter = Vec2.sub(new Vec2(worldCenterX, worldCenterY), s.pos);
-  s.angle = Math.atan2(toCenter.y, toCenter.x) + (Math.random() - 0.5) * 0.8;
-
-  // Give initial velocity toward center to start sailing in
-  const initialSpeed = 50 + Math.random() * 50; // 50-100 units/sec
-  const dir = toCenter.clone().normalize();
-  s.vel.set(dir.x * initialSpeed, dir.y * initialSpeed);
-
-  return s;
-}
 
 function initGame(sprite?: HTMLImageElement) {
   shipSpriteRef = sprite;
@@ -254,40 +288,11 @@ function initGame(sprite?: HTMLImageElement) {
   setupShopNotification();
   setupTorpedoNotification();
 
-  // Spawn AI ships: some in view, some scattered around the world
+  // Spawn AI ships randomly throughout the map with collision avoidance
   const totalShips = Constants.AI_TOTAL_STARTING_SHIPS;
-  const shipsInView = Constants.AI_START_IN_VIEW_COUNT; // Always have N ships in view initially
 
-  // Spawn ships in view first
-  for (let i = 0; i < shipsInView; i++) {
-    const s = spawnAIShipInView(player, sprite);
-    ships.push(s);
-    enemies.push(s);
-  }
-
-  // Spawn remaining ships scattered around the world
-  const remainingShips = totalShips - shipsInView;
-  const minR = Constants.AI_SPAWN_ANNULUS_MIN_R;
-  const maxR = Constants.AI_SPAWN_ANNULUS_MAX_R;
-  for (let i = 0; i < remainingShips; i++) {
-    const s = createAIShip(player, sprite);
-    // Only apply regular AI stats if it's not a capital ship
-    if (!(s instanceof CapitalShip)) {
-      s.maxHealth = Constants.AI_MAX_HEALTH;
-      s.health = s.maxHealth;
-      s.maxSpeed = Constants.AI_MAX_SPEED;
-      s.thrust = Constants.AI_THRUST;
-      s.reverseThrust = Constants.AI_REVERSE_THRUST;
-      s.turnAccel = Constants.AI_TURN_ACCEL;
-      s.rudderRate = Constants.AI_RUDDER_RATE;
-      s.linDrag = Constants.AI_LINEAR_DRAG;
-      s.angDrag = Constants.AI_ANGULAR_DRAG;
-    }
-    // random position in annulus [minR, maxR) around player
-    const angle = Math.random() * Math.PI * 2;
-    const r = Math.sqrt(Math.random() * (maxR * maxR - minR * minR) + minR * minR);
-    s.pos.set(player.pos.x + Math.cos(angle) * r, player.pos.y + Math.sin(angle) * r);
-    s.angle = angle + (Math.random() - 0.5) * 0.6; // varied starting heading
+  for (let i = 0; i < totalShips; i++) {
+    const s = spawnAIShipRandom(player, ships, sprite);
     ships.push(s);
     enemies.push(s);
   }
@@ -368,11 +373,17 @@ function drawOcean(w: number, h: number, cam: Vec2, t: number) {
 }
 
 let last = performance.now();
+let speedupMode = false;
 function loop(now: number) {
   requestAnimationFrame(loop);
   const dtRaw = (now - last) / 1000;
   last = now;
-  const dt = Math.min(0.033, dtRaw); // clamp for stability
+  let dt = Math.min(0.033, dtRaw); // clamp for stability
+
+  // Apply speedup multiplier when enabled
+  if (speedupMode) {
+    dt *= 2.0; // 2x speed
+  }
 
   // Tick collision cooldowns
   if (collisionCooldown.size) {
@@ -413,6 +424,13 @@ function loop(now: number) {
     for (let i = ships.length - 1; i >= 0; i--) {
       const s = ships[i];
       if (s.isFullySunk()) {
+        // Spawn a new ship when an enemy ship is killed (if not at max capacity)
+        if (s !== player && enemies.length < Constants.MAX_ENEMIES_TOTAL) {
+          const newShip = spawnShipAtEdge(player, ships, shipSpriteRef);
+          ships.push(newShip);
+          enemies.push(newShip);
+        }
+
         ships.splice(i, 1);
         const ei = enemies.indexOf(s);
         if (ei >= 0) enemies.splice(ei, 1);
@@ -431,9 +449,6 @@ function loop(now: number) {
     updateScoreHud();
     updateShopNotification();
     updateTorpedoNotification();
-
-    // Maintain minimum ships in view
-    maintainShipsInView();
 
     // Camera follows ship, with slight lead in velocity direction
     camera.x = player.pos.x + player.vel.x * Constants.CAMERA_VELOCITY_LEAD_FACTOR;
@@ -541,6 +556,13 @@ function loop(now: number) {
   for (let i = ships.length - 1; i >= 0; i--) {
     const s = ships[i];
     if (s.isSinking && s.isFullySunk()) {
+      // Spawn a new ship when an enemy ship is killed (if not at max capacity)
+      if (s !== player && enemies.length < Constants.MAX_ENEMIES_TOTAL) {
+        const newShip = spawnShipAtEdge(player, ships, shipSpriteRef);
+        ships.push(newShip);
+        enemies.push(newShip);
+      }
+
       if (s !== player) {
         ships.splice(i, 1);
         const ei = enemies.indexOf(s);
@@ -626,6 +648,11 @@ function loop(now: number) {
   // Open shop with P (always allowed); close handled above when open
   if (!upgradeOverlayOpen && input.wasPressed('KeyP')) {
     openUpgradeOverlay();
+  }
+
+  // Toggle speedup mode with S (always allowed)
+  if (input.wasPressed('KeyS')) {
+    speedupMode = !speedupMode;
   }
 
   // Auto-collect treasure when in pickup radius
@@ -1661,39 +1688,5 @@ function resolveShipCollisions(all: Ship[], dt: number) {
   }
 }
 
-// Maintain minimum ships in player's view
-function maintainShipsInView() {
-  if (!player) return;
-
-  const viewport = getViewportBounds(camera, canvas.width, canvas.height);
-  const minShipsInView = Constants.MIN_ENEMIES_IN_VIEW;
-  const maxTotalShips = Constants.MAX_ENEMIES_TOTAL;
-
-  // Count ships currently in view that are not sinking (excluding player)
-  let shipsInView = 0;
-  for (const s of enemies) {
-    if (!s.isSinking && s.pos.x >= viewport.left && s.pos.x <= viewport.right &&
-      s.pos.y >= viewport.top && s.pos.y <= viewport.bottom) {
-      shipsInView++;
-    }
-  }
-
-  // Count ships that are currently sinking to avoid over-spawning
-  let sinkingShips = 0;
-  for (const s of enemies) {
-    if (s.isSinking && !s.isFullySunk()) {
-      sinkingShips++;
-    }
-  }
-
-  // Spawn new ships beyond map edges if we have fewer than minimum active ships in view
-  // and haven't reached max total, but wait for sinking ships to finish first
-  while (shipsInView < minShipsInView && enemies.length - sinkingShips < maxTotalShips) {
-    const s = spawnAIShipBeyondMap(player);
-    ships.push(s);
-    enemies.push(s);
-    shipsInView++;
-  }
-}
 
 // Removed ensureAggressiveAI() function - ships now only become aggressive when damaged
