@@ -3,9 +3,9 @@
 // =========================
 
 // XP rewards for combat and collection
-export const XP_DAMAGE_MULTIPLIER = 0.125; // XP gained = 25% of damage dealt (reduced from 50%)
+export const XP_DAMAGE_MULTIPLIER = 0.25; // XP gained = 25% of damage dealt (increased from 12.5%)
 export const XP_SINK_BONUS = 80; // Bonus XP for sinking a ship
-export const XP_TREASURE_LARGE = 300; // XP from collecting large treasure (capital ships)
+export const XP_TREASURE_LARGE = 400; // XP from collecting large treasure (capital ships)
 
 // Shop upgrade costs
 export const XP_UPGRADE_BASE_COST = 100; // Base cost for shop upgrades
