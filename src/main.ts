@@ -97,14 +97,14 @@ let gameStats = {
 // World bounds (finite map) - now defined above
 
 // Helper function to decide ship type based on rarity
-function shouldSpawnCapitalShip(): boolean {
-  // 15% chance to spawn a capital ship instead of regular AI ship
-  return Math.random() < 0.15;
+function shouldSpawnCapitalShip(chance: number = 0.15): boolean {
+  // Default 15% chance, but can be overridden for respawns (20%)
+  return Math.random() < chance;
 }
 
 // Create AI ship or capital ship based on rarity
-function createAIShip(player: Ship, sprite?: HTMLImageElement): AIShip {
-  if (shouldSpawnCapitalShip()) {
+function createAIShip(player: Ship, sprite?: HTMLImageElement, capitalChance: number = 0.15): AIShip {
+  if (shouldSpawnCapitalShip(capitalChance)) {
     return new CapitalShip(player, { sprite });
   } else {
     return new AIShip(player, { ship: { length: Constants.AI_LENGTH_PX, width: Constants.AI_WIDTH_PX, cannonPairs: Constants.AI_CANNON_PAIRS }, sprite });
@@ -121,6 +121,30 @@ loadShipSinkingSound().catch(err => console.warn('Ship sinking sound initializat
 // Try to load webp sprite; fallback to hull drawing
 Assets.loadImage('/ship.webp').then(img => initGame(img)).catch(() => initGame());
 
+// Create ships for initial spawn ensuring exactly 2 capital ships
+function createInitialShips(player: Ship, totalShips: number, sprite?: HTMLImageElement): AIShip[] {
+  const ships: AIShip[] = [];
+  let capitalShipsCreated = 0;
+  const targetCapitalShips = 2;
+
+  for (let i = 0; i < totalShips; i++) {
+    // Force capital ship creation if we haven't reached the target yet
+    const forceCapital = capitalShipsCreated < targetCapitalShips && i >= totalShips - (targetCapitalShips - capitalShipsCreated);
+
+    let ship: AIShip;
+    if (forceCapital) {
+      ship = new CapitalShip(player, { sprite });
+      capitalShipsCreated++;
+    } else {
+      ship = new AIShip(player, { ship: { length: Constants.AI_LENGTH_PX, width: Constants.AI_WIDTH_PX, cannonPairs: Constants.AI_CANNON_PAIRS }, sprite });
+    }
+
+    ships.push(ship);
+  }
+
+  return ships;
+}
+
 // Helper function to check if a position is too close to existing ships
 function isPositionValid(pos: Vec2, existingShips: Ship[], minDistance: number): boolean {
   for (const ship of existingShips) {
@@ -133,8 +157,8 @@ function isPositionValid(pos: Vec2, existingShips: Ship[], minDistance: number):
 }
 
 // Simplified random spawning with collision avoidance
-function spawnAIShipRandom(player: Ship, existingShips: Ship[], sprite?: HTMLImageElement): AIShip {
-  const s = createAIShip(player, sprite);
+function spawnAIShipRandom(player: Ship, existingShips: Ship[], sprite?: HTMLImageElement, capitalChance: number = 0.15): AIShip {
+  const s = createAIShip(player, sprite, capitalChance);
 
   // Only apply regular AI stats if it's not a capital ship
   if (!(s instanceof CapitalShip)) {
@@ -186,7 +210,7 @@ function spawnAIShipRandom(player: Ship, existingShips: Ship[], sprite?: HTMLIma
 
 // New edge spawning function for ships that spawn when others are killed
 function spawnShipAtEdge(player: Ship, existingShips: Ship[], sprite?: HTMLImageElement): AIShip {
-  const s = createAIShip(player, sprite);
+  const s = createAIShip(player, sprite, 0.20); // 20% chance for capital ships on respawn
 
   // Only apply regular AI stats if it's not a capital ship
   if (!(s instanceof CapitalShip)) {
@@ -288,13 +312,55 @@ function initGame(sprite?: HTMLImageElement) {
   setupShopNotification();
   setupTorpedoNotification();
 
-  // Spawn AI ships randomly throughout the map with collision avoidance
+  // Spawn AI ships with exactly 2 capital ships for initial spawn
   const totalShips = Constants.AI_TOTAL_STARTING_SHIPS;
 
-  for (let i = 0; i < totalShips; i++) {
-    const s = spawnAIShipRandom(player, ships, sprite);
-    ships.push(s);
-    enemies.push(s);
+  // Create ships ensuring exactly 2 capital ships
+  const initialShips = createInitialShips(player, totalShips, sprite);
+
+  for (const s of initialShips) {
+    // Apply stats for regular AI ships (capital ships use their own stats)
+    if (!(s instanceof CapitalShip)) {
+      s.maxHealth = Constants.AI_MAX_HEALTH;
+      s.health = s.maxHealth;
+      s.maxSpeed = Constants.AI_MAX_SPEED;
+      s.thrust = Constants.AI_THRUST;
+      s.reverseThrust = Constants.AI_REVERSE_THRUST;
+      s.turnAccel = Constants.AI_TURN_ACCEL;
+      s.rudderRate = Constants.AI_RUDDER_RATE;
+      s.linDrag = Constants.AI_LINEAR_DRAG;
+      s.angDrag = Constants.AI_ANGULAR_DRAG;
+    }
+
+    // Find a valid spawn position with collision avoidance
+    const minShipDistance = 200;
+    const minPlayerDistance = 400;
+
+    for (let attempts = 0; attempts < 50; attempts++) {
+      const margin = 300;
+      const x = WORLD.minX + margin + Math.random() * (WORLD.maxX - WORLD.minX - 2 * margin);
+      const y = WORLD.minY + margin + Math.random() * (WORLD.maxY - WORLD.minY - 2 * margin);
+
+      const testPos = new Vec2(x, y);
+
+      // Check if position is valid (not too close to existing ships or player)
+      let valid = true;
+      for (const existingShip of ships) {
+        if (Vec2.sub(testPos, existingShip.pos).len() < minShipDistance) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid || Vec2.sub(testPos, player.pos).len() < minPlayerDistance) {
+        continue;
+      }
+
+      s.pos.set(x, y);
+      s.angle = Math.random() * Math.PI * 2;
+      ships.push(s);
+      enemies.push(s);
+      break;
+    }
   }
 
   // Show start screen
