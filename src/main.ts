@@ -613,18 +613,18 @@ function loop(now: number) {
       applyUpgradeAddCannons();
     } else if (input.wasPressed('Digit4') || input.wasPressed('Numpad4')) {
       applyUpgradeTorpedo();
-    } else if (input.wasPressed('Escape') || input.wasPressed('KeyS')) {
+    } else if (input.wasPressed('Escape') || input.wasPressed('KeyP')) {
       closeUpgradeOverlay();
     }
   }
 
   // Close start screen with any key press
-  if (startScreenOpen && (input.wasPressed('KeyS') || input.wasPressed('Space') || input.wasPressed('ArrowUp') || input.wasPressed('ArrowDown') || input.wasPressed('ArrowLeft') || input.wasPressed('ArrowRight') || input.wasPressed('KeyT'))) {
+  if (startScreenOpen && (input.wasPressed('KeyP') || input.wasPressed('Space') || input.wasPressed('ArrowUp') || input.wasPressed('ArrowDown') || input.wasPressed('ArrowLeft') || input.wasPressed('ArrowRight') || input.wasPressed('KeyT'))) {
     closeStartScreen();
   }
 
-  // Open shop with S (always allowed); close handled above when open
-  if (!upgradeOverlayOpen && input.wasPressed('KeyS')) {
+  // Open shop with P (always allowed); close handled above when open
+  if (!upgradeOverlayOpen && input.wasPressed('KeyP')) {
     openUpgradeOverlay();
   }
 
