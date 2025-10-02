@@ -77,7 +77,7 @@ export const SHOP_HEAL_DURATION_S = 5; // seconds to apply healing from shop upg
 
 // Torpedo system
 export const TORPEDO_COST_XP = 400;
-export const TORPEDO_RELOAD_S = 20;
+export const TORPEDO_RELOAD_S = 15;
 export const TORPEDO_ARMING_S = 1;
 export const TORPEDO_SPEED = 120;
 

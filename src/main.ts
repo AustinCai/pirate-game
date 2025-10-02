@@ -56,7 +56,7 @@ let startScreenEl: HTMLDivElement | null = null;
 let gameOverScreenOpen = false;
 let gameOverScreenEl: HTMLDivElement | null = null;
 let collectLabelEl: HTMLDivElement | null = null;
-let playerXP = 400; // Starting XP for ship customization
+let playerXP = 700; // Starting XP for ship customization
 let totalXP = 400; // Total XP ever earned (never decreases)
 // Upgrade XP costs (initialized from constants)
 let costRepairXP = Constants.XP_UPGRADE_BASE_COST;
@@ -1048,8 +1048,8 @@ function openUpgradeOverlay() {
   mkBtn(`1) Repair ship (+50% max) — ${Math.ceil(costRepairXP)} XP`, playerXP >= costRepairXP, applyUpgradeRepair);
   mkBtn(`2) Reinforce hull (+30 max & current) — ${Math.ceil(costReinforceXP)} XP`, playerXP >= costReinforceXP, applyUpgradeReinforce);
   mkBtn(`3) Add cannons (+1 per side) — ${Math.ceil(costCannonsXP)} XP`, playerXP >= costCannonsXP, applyUpgradeAddCannons);
-  const torpLabel = torpedoTubes.length >= 4 ? '4) Torpedo tube — Max 4' : `4) Torpedo tube (press T) — ${Math.ceil(costTorpedoXP)} XP (Owned ${torpedoTubes.length}/4)`;
-  mkBtn(torpLabel, torpedoTubes.length < 4 && playerXP >= costTorpedoXP, applyUpgradeTorpedo);
+  const torpLabel = `4) Torpedo tube (press T) — ${Math.ceil(costTorpedoXP)} XP (Owned ${torpedoTubes.length})`;
+  mkBtn(torpLabel, playerXP >= costTorpedoXP, applyUpgradeTorpedo);
   const hint = document.createElement('div');
   hint.textContent = 'Tip: press 1 / 2 / 3 / 4 to choose';
   hint.style.opacity = '0.8';
@@ -1084,7 +1084,6 @@ function applyStartUpgradeAddCannons() {
 }
 
 function applyStartUpgradeTorpedo() {
-  if (torpedoTubes.length >= 4) return;
   if (playerXP < costTorpedoXP) return;
   playerXP -= costTorpedoXP;
   torpedoTubes.push({ cooldown: 0, arming: 0 });
@@ -1211,8 +1210,8 @@ function openStartScreen() {
 
   mkBtn(`Reinforce Hull (+30 HP) — ${Math.ceil(costReinforceXP)} XP`, playerXP >= costReinforceXP, applyStartUpgradeReinforce);
   mkBtn(`Add Cannons (+1 per side) — ${Math.ceil(costCannonsXP)} XP`, playerXP >= costCannonsXP, applyStartUpgradeAddCannons);
-  const torpLabel = torpedoTubes.length >= 4 ? 'Torpedo Tube — Max 4' : `Torpedo Tube (press T) — ${Math.ceil(costTorpedoXP)} XP`;
-  mkBtn(torpLabel, torpedoTubes.length < 4 && playerXP >= costTorpedoXP, applyStartUpgradeTorpedo);
+  const torpLabel = `Torpedo Tube (press T) — ${Math.ceil(costTorpedoXP)} XP`;
+  mkBtn(torpLabel, playerXP >= costTorpedoXP, applyStartUpgradeTorpedo);
 
   rightColumn.appendChild(shopList);
 
@@ -1226,7 +1225,7 @@ function openStartScreen() {
     <strong>Current Ship:</strong><br>
     Health: ${Math.floor(player.health)}/${Math.floor(player.maxHealth)} HP<br>
     Cannons: ${player.cannons.length} total<br>
-    Torpedoes: ${torpedoTubes.length}/4 tubes
+    Torpedoes: ${torpedoTubes.length} tubes
   `;
   rightColumn.appendChild(statusDiv);
 
@@ -1386,8 +1385,8 @@ function restartGame() {
   gameStats.shipsSunk.capital = 0;
 
   // Reset player XP and upgrade costs
-  playerXP = 400;
-  totalXP = 400; // Reset total XP to starting amount
+  playerXP = 700;
+  totalXP = 700; // Reset total XP to starting amount
   costRepairXP = Constants.XP_UPGRADE_BASE_COST;
   costReinforceXP = Constants.XP_UPGRADE_BASE_COST;
   costCannonsXP = Constants.XP_UPGRADE_BASE_COST;
@@ -1463,7 +1462,6 @@ function applyUpgradeAddCannons() {
 
 function applyUpgradeTorpedo() {
   if (!upgradeOverlayOpen) return;
-  if (torpedoTubes.length >= 4) return;
   if (playerXP < costTorpedoXP) return;
   playerXP -= costTorpedoXP;
   torpedoTubes.push({ cooldown: 0, arming: 0 });
