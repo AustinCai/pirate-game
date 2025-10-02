@@ -573,9 +573,12 @@ function loop(now: number) {
         if (s.isSinking && s.isFullySunk()) continue;
         if (s.hitsCircle(p.pos, p.radius)) {
           const prev = s.health;
-          s.takeDamage(p.damage, p.owner === player);
+          const damage = p.getDamage();
+          if (damage > 0) {
+            s.takeDamage(damage, p.owner === player);
+          }
           if (p.owner === player) {
-            addXP(p.damage * Constants.XP_DAMAGE_MULTIPLIER);
+            addXP(damage * Constants.XP_DAMAGE_MULTIPLIER);
             // Track hit based on projectile type
             if (p instanceof Torpedo) {
               (window as any).trackTorpedoHit();

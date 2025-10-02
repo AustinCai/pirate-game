@@ -12,13 +12,15 @@ export class Projectile {
   radius = 3;         // Collision radius in pixels
   life = 0;           // How long this projectile has existed (seconds)
   maxLife = 4;        // Maximum lifetime before automatic removal (seconds)
-  damage = 12;        // Damage dealt to ships on hit
+  damage = 12;        // Base damage dealt to ships on hit (at point blank range)
   owner?: Ship;       // Ship that fired this projectile (prevents self-damage)
+  startPos: Vec2;     // Position where projectile was fired from
 
   constructor(pos: Vec2, vel: Vec2, owner?: Ship) {
     this.pos = pos.clone();  // Clone to avoid shared reference issues
     this.vel = vel.clone();
     this.owner = owner;
+    this.startPos = pos.clone(); // Track starting position for range calculations
   }
 
   /**
@@ -31,10 +33,33 @@ export class Projectile {
   }
 
   /**
-   * Check if projectile should still exist in the world
+   * Calculate current damage based on distance traveled from start position
+   * - Full damage (12) up to 600 units
+   * - Damage decays linearly to 33% (4) at 1200 units
+   * - Beyond 1200 units, projectile disappears and deals no damage
    */
-  get alive() { 
-    return this.life < this.maxLife; 
+  getDamage(): number {
+    const distance = Vec2.sub(this.pos, this.startPos).len();
+
+    if (distance >= 1200) {
+      return 0; // No damage beyond maximum range
+    } else if (distance <= 600) {
+      return this.damage; // Full damage within effective range
+    } else {
+      // Linear decay from 600 to 1200 (from 100% to 33%)
+      const decayProgress = (distance - 600) / (1200 - 600); // 0 to 1
+      const damageMultiplier = 1.0 - (0.67 * decayProgress); // 1.0 to 0.33
+      return Math.floor(this.damage * damageMultiplier);
+    }
+  }
+
+  /**
+   * Check if projectile should still exist in the world
+   * Remove if lifetime exceeded OR range exceeded
+   */
+  get alive() {
+    const distance = Vec2.sub(this.pos, this.startPos).len();
+    return this.life < this.maxLife && distance < 1200;
   }
 
   /**
