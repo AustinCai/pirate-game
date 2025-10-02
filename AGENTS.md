@@ -1,53 +1,35 @@
-# Project Overview
-
-This project implements a "flash game" style pirate ship game, where you control a pirate ship from a bird's eye view in the open ocean and can fire cannons.
-
-There are other AI ships throughout the map that the play-controlled ship should try to kill.
-
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `index.html`: Canvas + HUD shell.
-- `src/main.ts`: Game loop, rendering, camera, HUD updates.
-- `src/core/`: Small utilities (e.g., `vector.ts`, `input.ts`, `assets.ts`).
-- `src/game/`: Game-domain code (e.g., `ship.ts`, `projectile.ts`).
-- `public/`: Static assets served at root (e.g., `public/ship.webp`).
-- `README.md`: Run instructions and design notes.
-
-Prefer small, focused modules. Keep domain logic in `src/game` and infrastructure/utilities in `src/core`. Use named exports.
+- `index.html` hosts the canvas bootstrapping the HUD overlay.
+- Gameplay loop, rendering, and camera logic live in `src/main.ts`.
+- Shared utilities (vectors, input, assets, audio) sit under `src/core/`.
+- Domain entities such as ships, projectiles, and torpedoes reside in `src/game/`.
+- Static art and audio are served from `public/`; compiled output lands in `dist/` after a build.
 
 ## Build, Test, and Development Commands
-- `npm install`: Install dependencies.
-- `npm run dev`: Start Vite dev server with HMR.
-- `npm run build`: Production build to `dist/`.
-- `npm run preview`: Serve the built app locally for verification.
-
-Examples:
-- Run locally: `npm run dev`
-- Build + preview: `npm run build && npm run preview`
+- `npm install` installs dependencies.
+- `npm run dev` starts the Vite dev server with hot module replacement.
+- `npm run build` produces a production bundle in `dist/` (run before publishing changes).
+- `npm run preview` serves the last build locally for smoke testing release assets.
 
 ## Coding Style & Naming Conventions
-- TypeScript, strict mode enabled.
-- Indentation: 2 spaces; include semicolons; trailing commas ok.
-- Filenames: lowercase with dashes for multiword (e.g., `ocean-grid.ts`).
-- Classes: `PascalCase` (e.g., `Ship`, `Vec2`).
-- Functions/variables: `camelCase`.
-- Avoid default exports; prefer named exports.
-- Keep changes minimal and localized; avoid drive‑by refactors.
+- TypeScript in strict mode; prefer small modules with named exports.
+- Use two-space indentation, semicolons, and allow trailing commas.
+- Filenames are lowercase with dashes (`ocean-grid.ts`), classes use `PascalCase`, functions and variables use `camelCase`.
+- Keep feature work localized; avoid opportunistic refactors without discussion.
 
 ## Testing Guidelines
-- No automated tests yet. Manual playtesting is expected.
-- If adding tests, prefer `vitest` and place files beside sources: `foo.spec.ts`.
-- Keep tests fast and deterministic; avoid canvas rendering in unit tests.
+- No automated suite exists yet; rely on `npm run build` and manual play sessions to validate changes.
+- If you add tests, use `vitest`, colocate specs beside sources as `*.spec.ts`, and focus on deterministic logic (avoid canvas rendering paths).
+- Document any new manual test steps in the PR description.
 
 ## Commit & Pull Request Guidelines
-- Commits: concise, imperative subject (max ~72 chars), with context in body if needed.
-  - Example: `feat(ship): add sequential port/starboard firing`
-  - Example: `fix(input): prevent page scroll on Space`
-- PRs: include a short description, screenshots/GIFs for visual changes, and steps to verify.
-- Ensure `npm run build` passes and the game loads before requesting review.
+- Write imperative, scoped commit subjects (≤72 chars), e.g. `fix(ai): steady broadside tracking`.
+- PRs should summarize intent, list verification steps, and include screenshots or clips for visual tweaks.
+- Ensure `npm run build` succeeds and no TypeScript errors remain before requesting review.
 
 ## Architecture Overview
-- Core loop in `src/main.ts` advances simulation (`Ship`, `Projectile`), updates HUD, and draws.
-- Entities are simple classes with `update(dt)` and `draw(...)` where appropriate.
-- Extend by adding new systems/entities under `src/game` and wiring them in `main.ts`.
+- The render/update loop in `src/main.ts` advances all entities, resolves collisions, and updates the HUD each frame.
+- `Ship` and its AI subclasses expose `update(dt)` for simulation and `draw` for rendering; new mechanics should extend these entry points.
+- Builders should route shared math or input helpers through `src/core/` to keep `src/game/` focused on gameplay rules.
